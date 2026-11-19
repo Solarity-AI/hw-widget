@@ -1,4 +1,4 @@
-// HW Widget for Windows - hardware sampler.
+﻿// HW Widget for Windows - hardware sampler.
 // C# 5 only: compiled by the in-box .NET Framework compiler (csc.exe v4.x), no SDK, no admin rights.
 using System;
 using System.Collections.Generic;
@@ -26,6 +26,7 @@ namespace HwWidget
         public double CpuPercent = double.NaN;
         public double CpuTempC = double.NaN;
         public string CpuTempSource = "";
+        public string CpuTempHint = "";            // why there is no CPU temperature, shown in the card
         public double RamPercent = double.NaN;
         public double RamUsedGB = double.NaN;
         public double RamTotalGB = double.NaN;
@@ -465,10 +466,13 @@ namespace HwWidget
                 if (!double.IsNaN(g.TempC) && (double.IsNaN(s.GpuTempC) || g.TempC > s.GpuTempC)) s.GpuTempC = g.TempC;
         }
 
-        // ------------------------------------------------ CPU temperature: LibreHardwareMonitor, else ACPI thermal zones
+        // ------------------------------------------------ CPU temperature: LibreHardwareMonitor, the opt-in helper, else ACPI zones
         void SampleCpuTemp(HwSnapshot s)
         {
             if (TryLhm(s)) return;
+            string hsrc;
+            double ht = HelperFile.Read(out hsrc);
+            if (!double.IsNaN(ht)) { s.CpuTempC = ht; s.CpuTempSource = hsrc; return; }
             Dictionary<string, double> zones = new Dictionary<string, double>();
             foreach (KeyValuePair<string, double> kv in Pdh.ReadArray(cZone, Pdh.FMT_DOUBLE))
             {
@@ -488,6 +492,7 @@ namespace HwWidget
                 s.CpuTempC = Math.Round(zones[pick], 1);
                 s.CpuTempSource = "ACPI thermal zone " + ZonePicker.Short(pick);
             }
+            else s.CpuTempHint = HelperSetup.Installed ? "Temperature helper installed, waiting for a reading" : "Right-click and choose Enable CPU temperature";
         }
 
         bool TryLhm(HwSnapshot s)

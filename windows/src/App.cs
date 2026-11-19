@@ -1,4 +1,4 @@
-// HW Widget for Windows - the taskbar window, hover card, menu, settings and test modes.
+﻿// HW Widget for Windows - the taskbar window, hover card, menu, settings and test modes.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -533,6 +533,8 @@ namespace HwWidget
                 Item("GPU", cfg.FourthMetric == Fourth.Gpu, delegate { SetFourth(Fourth.Gpu); }),
                 Item("Disk", cfg.FourthMetric == Fourth.Disk, delegate { SetFourth(Fourth.Disk); })));
             menu.Items.Add(new ToolStripSeparator());
+            bool helper = HelperSetup.Installed;
+            menu.Items.Add(Item(helper ? "Remove CPU temperature helper (admin)" : "Enable CPU temperature (admin)", false, delegate { ToggleHelper(!helper); }));
             bool auto = Settings.StartsWithWindows;
             menu.Items.Add(Item("Start with Windows", auto, delegate { Settings.StartsWithWindows = !auto; }));
             menu.Items.Add(Item("Reset position", false, delegate { cfg.OffsetFromRight = -1; cfg.Save(); Housekeep(); Redraw(); }));
@@ -541,6 +543,19 @@ namespace HwWidget
             menu.Items.Add(Item("Exit", false, delegate { Quit(); }));
             if (dark) foreach (ToolStripItem it in menu.Items) if (it is ToolStripSeparator) it.ForeColor = Palette.Hex("#3A3A55");
             menu.Show(Cursor.Position);
+        }
+
+        // 1 UAC prompt; runs off the UI thread so the pill keeps drawing while Windows asks.
+        void ToggleHelper(bool install)
+        {
+            Thread t = new Thread(delegate()
+            {
+                bool ok = HelperSetup.RunElevated(install ? "--install-helper" : "--uninstall-helper");
+                if (!ok && install)
+                    try { BeginInvoke((MethodInvoker)delegate { MessageBox.Show("The CPU temperature helper was not installed (the admin prompt was declined or failed).", "HW Widget", MessageBoxButtons.OK, MessageBoxIcon.Information); }); } catch { }
+                wake.Set();
+            });
+            t.IsBackground = true; t.Start();
         }
 
         void Quit()
@@ -689,6 +704,16 @@ namespace HwWidget
             check("cells: GPU temperature fallback is labelled", c[0].Label == "GPU°" && c[3].Label == "GPU");
             check("cells: hot CPU is critical", Painter.Cells(Fake("hot"), false, Fourth.Auto, Palette.For(true))[1].Level == 2);
 
+            check("esif: deg C, Kelvin and tenths of Kelvin", EsifPicker.ToCelsius(75) == 75 && EsifPicker.ToCelsius(348.15) == 75 && EsifPicker.ToCelsius(3481.5) == 75);
+            check("esif: hottest live participant, zeros and placeholders skipped", EsifPicker.Pick(new double[] { 0, 61, 75, 73, 0, 3010 }) == 75);
+            check("esif: no live participant is unknown", double.IsNaN(EsifPicker.Pick(new double[] { 0, 0, 200 })));
+            string hs; long now = 1800000000000L;
+            check("helper file: fresh reading round-trips", HelperFile.Parse(HelperFile.Format(now - 2000, 74.04, "Intel Dynamic Tuning"), now, out hs) == 74 && hs == "Intel Dynamic Tuning");
+            check("helper file: stale reading ignored", double.IsNaN(HelperFile.Parse(HelperFile.Format(now - 16000, 74, "x"), now, out hs)));
+            check("helper file: garbage and implausible values ignored", double.IsNaN(HelperFile.Parse("hello", now, out hs)) && double.IsNaN(HelperFile.Parse(HelperFile.Format(now, 140, "x"), now, out hs)));
+            HwSnapshot hinted = Fake("normal"); hinted.CpuTempC = double.NaN; hinted.Gpus = new GpuInfo[0]; hinted.GpuTempC = double.NaN; hinted.CpuTempHint = "Right-click and choose Enable CPU temperature";
+            check("cells: no temperature at all is a dash", Painter.Cells(hinted, false, Fourth.Auto, Palette.For(true))[0].Value == Fmt.Temp(double.NaN, false));
+
             Size ps = Painter.PillSize(4, 1.25f);
             check("pill: 192x34 DIP -> 240x43 px at 125%", ps.Width == 240 && ps.Height == 43);
 
@@ -709,6 +734,9 @@ namespace HwWidget
                 if (args.Length >= 2 && args[0] == "--render") return TestModes.Render(args[1]);
                 if (args.Length >= 3 && args[0] == "--probe") return TestModes.Probe(int.Parse(args[1], CultureInfo.InvariantCulture), args[2]);
                 if (args.Length >= 2 && args[0] == "--selftest") return TestModes.SelfTest(args[1]);
+                if (args.Length >= 1 && args[0] == "--sensor-helper") return SensorHelper.Run();
+                if (args.Length >= 1 && args[0] == "--install-helper") return HelperSetup.Install();
+                if (args.Length >= 1 && args[0] == "--uninstall-helper") return HelperSetup.Uninstall();
             }
             catch (Exception ex)
             {
