@@ -14,7 +14,7 @@ Open it for details: GPU temperature and memory, disk activity and network speed
 
 ## What it shows
 
-| Cell | Source (no admin or root rights needed) | Turns amber / red at |
+| Cell | Source (no admin or root rights needed, except the opt-in Windows CPU temperature helper) | Turns amber / red at |
 | --- | --- | --- |
 | **TEMP** | CPU package temperature; GPU temperature (labelled `GPU°`) when the CPU has no readable sensor | 80 / 90 °C |
 | **CPU** | Total processor load | 75 / 90 % |
@@ -42,6 +42,26 @@ powershell -ExecutionPolicy Bypass -File windows\uninstall.ps1
 ```
 
 Sensors: Performance counters (CPU, memory, disk), the Windows graphics kernel (GPU load and temperature, as Task Manager shows them), NVIDIA NVML as a fallback, ACPI thermal zones for the CPU temperature, and [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) when it is running.
+
+#### No CPU temperature? Enable the helper (1 admin prompt)
+
+Some laptops, for example Intel Core Ultra (Lunar Lake) machines, show a dash for TEMP. Their only ACPI zone is a fixed placeholder, and the real sensors (Intel Dynamic Tuning, `root\wmi:EsifDeviceInformation`) can only be read by an admin.
+
+To fix it, right-click the pill and choose **Enable CPU temperature (admin)**. You can also run this:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File windows\install.ps1 -EnableCpuTemp
+```
+
+After 1 UAC prompt, this does 3 things:
+
+1. It copies the widget to `%ProgramFiles%\HWWidget\HWWidgetSensor.exe`, a folder only admins can write to.
+2. It registers the `HW Widget CPU temperature helper` task, which runs as SYSTEM at boot.
+3. Every 2 seconds the task writes the hottest live reading to `%ProgramData%\HWWidget\cpu-temp.txt`. Users can read that folder but not write to it.
+
+The widget itself still runs without admin rights. It ignores readings older than 15 seconds.
+
+Turn the helper off from the same menu, which then reads **Remove CPU temperature helper (admin)**. `uninstall.ps1` also removes it.
 It uses under 1 % of 1 core and about 45 MB of memory, and hides itself while a full-screen app is in front.
 
 ### Linux (GNOME Shell 45–49)
@@ -67,7 +87,7 @@ Sensors: Mach host statistics (CPU, memory), IOKit (GPU load and memory, disk ac
 
 | Platform | Command | What it checks |
 | --- | --- | --- |
-| Windows | `windows\build.ps1`, then `windows\bin\HWWidget.exe --selftest out.txt` | 16 sensor, layout and formatting checks |
+| Windows | `windows\build.ps1`, then `windows\bin\HWWidget.exe --selftest out.txt` | 23 sensor, helper, layout and formatting checks |
 | Windows | `HWWidget.exe --render <dir>` / `--probe <secs> <csv>` | PNG renders of every state / live sensor log |
 | Linux | `sh linux/tests/run-docker.sh` | 44 parser, sensor-tree and model checks in Docker, plus PNG renders in `linux/tests/out` |
 | macOS | `sh macos/tests/run-docker.sh` | 35 model and parser checks of the shared core, on Linux in Docker |

@@ -1,4 +1,4 @@
-// HW Widget for Windows - drawing (GDI+). Everything is drawn in device-independent pixels, then scaled.
+﻿// HW Widget for Windows - drawing (GDI+). Everything is drawn in device-independent pixels, then scaled.
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -345,7 +345,7 @@ namespace HwWidget
             Row r;
 
             r = new Row(); r.Title = "Temperature";
-            r.Sub = double.IsNaN(s.CpuTempC) ? "No CPU sensor readable without admin" : (string.IsNullOrEmpty(s.CpuTempSource) ? "CPU" : "CPU · " + s.CpuTempSource);
+            r.Sub = double.IsNaN(s.CpuTempC) ? (string.IsNullOrEmpty(s.CpuTempHint) ? "No CPU sensor readable without admin" : s.CpuTempHint) : (string.IsNullOrEmpty(s.CpuTempSource) ? "CPU" : "CPU · " + s.CpuTempSource);
             r.Value = Fmt.TempLong(s.CpuTempC, f);
             r.Frac = double.IsNaN(s.CpuTempC) ? double.NaN : (s.CpuTempC - 30) / 70.0;
             r.A = TempColor(35); r.B = TempColor(s.CpuTempC); r.Dot = r.B;
