@@ -1,5 +1,6 @@
 // HW Widget - Linux sensors. Reads /proc and /sys under an injectable root so tests can use fixture trees.
-// No root rights needed. NVIDIA GPUs come from one long-lived `nvidia-smi -lms` process (no polling spawn).
+// No root rights needed. NVIDIA GPUs come from nvidia-smi: one long-lived `-lms` process on desktops, and on
+// laptops whose GPU can sleep (runtime D3) only short queries while the GPU is already awake.
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import {emptySnapshot} from './model.js';
@@ -18,10 +19,11 @@ export function readText(path) {
 export function listDir(path) {
     const out = [];
     try {
-        const dir = GLib.Dir.open(path, 0);
-        let name;
-        while ((name = dir.read_name()) !== null) out.push(name);
-        dir.close();
+        // Gio, not GLib.Dir: GLib.Dir.open is only introspectable from GLib 2.80 (GNOME 46).
+        const en = Gio.File.new_for_path(path).enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+        let info;
+        while ((info = en.next_file(null)) !== null) out.push(info.get_name());
+        en.close(null);
     } catch {}
     return out.sort();
 }
@@ -165,7 +167,9 @@ export function parseNvidiaLine(line) {
 
 // ---------------------------------------------------------------- the sampler
 export class Sampler {
-    constructor({root = '/', nvidia = true} = {}) {
+    // smi: path of nvidia-smi (default: from PATH); clock: ms timestamps, injectable for tests.
+    constructor({root = '/', nvidia = true, smi = null, clock = () => Date.now()} = {}) {
+        this._clock = clock;
         this.root = root.endsWith('/') ? root : `${root}/`;
         this._prevCpu = null;
         this._prevDisk = null;
@@ -174,22 +178,40 @@ export class Sampler {
         this._nvidia = new Map();
         this._nvProc = null;
         this._cpuName = cpuNameFrom(readText(this._p('proc/cpuinfo')));
-        if (nvidia) this._startNvidia();
+        if (nvidia) this._startNvidia(smi);
     }
 
     _p(rel) {
         return this.root + rel;
     }
 
-    _startNvidia() {
-        const smi = GLib.find_program_in_path('nvidia-smi');
+    // Runtime-PM status files of NVIDIA display devices that may sleep. Reading them never wakes the GPU.
+    _nvidiaPm() {
+        const base = this._p('sys/bus/pci/devices');
+        return listDir(base).filter(d => (readText(`${base}/${d}/vendor`) || '').trim() === '0x10de' &&
+            (readText(`${base}/${d}/class`) || '').trim().startsWith('0x03') &&
+            (readText(`${base}/${d}/power/control`) || '').trim() === 'auto')
+            .map(d => `${base}/${d}/power/runtime_status`);
+    }
+
+    _startNvidia(smi) {
+        smi ||= GLib.find_program_in_path('nvidia-smi');
         if (!smi) return;
+        this._smi = smi;
+        this._nvCancel = new Gio.Cancellable();
+        this._nvPm = this._nvidiaPm();
+        // A GPU that can sleep would never sleep with nvidia-smi holding it open, and 1 query keeps it awake
+        // about 21 s. So query only once it has been awake on its own for 25 s, at most every 30 s.
+        if (this._nvPm.length) {
+            this._nvNext = 0;
+            this._nvAwakeSince = 0;
+            return;
+        }
         try {
             this._nvProc = Gio.Subprocess.new(
                 [smi, '--query-gpu=index,utilization.gpu,temperature.gpu,memory.used,name', '--format=csv,noheader,nounits', '-lms', '2000'],
                 Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE);
             this._nvStream = new Gio.DataInputStream({base_stream: this._nvProc.get_stdout_pipe(), close_base_stream: true});
-            this._nvCancel = new Gio.Cancellable();
             this._readNvidia();
         } catch {
             this._nvProc = null;
@@ -207,11 +229,51 @@ export class Sampler {
             if (line === null) return;   // nvidia-smi exited
             const g = parseNvidiaLine(line);
             if (g) {
-                g.at = Date.now();
+                g.at = this._clock();
                 this._nvidia.set(g.index, g);
             }
             this._readNvidia();
         });
+    }
+
+    // Sleep-aware polling for GPUs with runtime power management (see _startNvidia).
+    _pollNvidia(now) {
+        if (!this._smi || !this._nvPm?.length) return;
+        if (this._nvPm.every(f => (readText(f) || '').trim() === 'suspended')) {
+            if (!this._nvidia.size) this._nvidia.set(0, {index: 0, name: 'NVIDIA GPU', integrated: false});
+            for (const g of this._nvidia.values())
+                Object.assign(g, {percent: 0, tempC: NaN, memUsedGB: NaN, asleep: true, at: now});
+            this._nvAwakeSince = 0;
+            return;
+        }
+        this._nvAwakeSince ||= now;
+        // Between queries an awake GPU keeps its last reading (0 % right after sleep), so the pill does not
+        // flip between GPU and DISK. The very first reading is taken at once to learn the GPU's name.
+        for (const g of this._nvidia.values()) Object.assign(g, {asleep: false, at: now});
+        const first = !this._nvidia.size;
+        if (this._nvBusy || (!first && (now < this._nvNext || now - this._nvAwakeSince < 25000))) return;
+        this._nvBusy = true;
+        this._nvNext = now + 30000;
+        try {
+            const proc = Gio.Subprocess.new(
+                [this._smi, '--query-gpu=index,utilization.gpu,temperature.gpu,memory.used,name', '--format=csv,noheader,nounits'],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE);
+            proc.communicate_utf8_async(null, this._nvCancel, (pr, res) => {
+                this._nvBusy = false;
+                try {
+                    const [, out] = pr.communicate_utf8_finish(res);
+                    for (const line of (out || '').split('\n')) {
+                        const g = parseNvidiaLine(line);
+                        if (g) {
+                            g.at = this._clock();
+                            this._nvidia.set(g.index, g);
+                        }
+                    }
+                } catch {}
+            });
+        } catch {
+            this._nvBusy = false;
+        }
     }
 
     _hwmon() {
@@ -251,7 +313,7 @@ export class Sampler {
     sample() {
         const s = emptySnapshot();
         s.cpuName = this._cpuName;
-        const now = Date.now();
+        const now = this._clock();
         const elapsed = this._prevAt ? now - this._prevAt : 0;
 
         const cpu = parseCpuTimes(readText(this._p('proc/stat')));
@@ -285,7 +347,11 @@ export class Sampler {
         this._prevNet = net;
         this._prevAt = now;
 
-        const gpus = [...this._nvidia.values()].filter(g => now - g.at < 10000).concat(this._amdGpus(chips));
+        this._pollNvidia(now);
+        const maxAge = this._nvPm?.length ? 40000 : 10000;   // sleep-aware readings come at most every 30 s
+        const gpus = [...this._nvidia.values()].filter(g => now - g.at < maxAge)
+            .map(g => (g.asleep ? {...g, name: `${g.name} · asleep`} : g))
+            .concat(this._amdGpus(chips));
         s.gpus = gpus;
         let busiest = null;
         for (const g of gpus) {

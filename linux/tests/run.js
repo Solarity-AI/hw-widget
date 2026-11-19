@@ -141,6 +141,63 @@ check('settings: valid values kept',
 check('a11y: pill reads as text', M.accessibleText?.(M.buildCells({...M.emptySnapshot(), cpuTempC: 61, cpuPercent: 23, ramPercent: 58})) ===
     'TEMP 61°, CPU 23%, RAM 58%, DISK unknown', M.accessibleText?.(M.buildCells({...M.emptySnapshot(), cpuTempC: 61, cpuPercent: 23, ramPercent: 58})));
 
+// #108: GLib.Dir.open is not introspectable before GLib 2.80, so every /sys folder looked empty on GNOME 42-45.
+{
+    const root = GLib.dir_make_tmp('hwwidget-ls-XXXXXX');
+    write(root, 'b/x', '1');
+    write(root, 'a/y', '1');
+    check('listDir: lists a folder without GLib.Dir', JSON.stringify(S.listDir(root)) === '["a","b"]', JSON.stringify(S.listDir(root)));
+    check('listDir: a missing folder is empty', S.listDir(`${root}/nope`).length === 0);
+}
+
+// #109: a long-lived nvidia-smi kept a laptop's sleeping NVIDIA GPU awake. Query only a GPU that is awake on its own.
+{
+    const root = fakeRoot('intel');
+    const dev = 'sys/bus/pci/devices/0000:01:00.0';
+    write(root, `${dev}/vendor`, '0x10de\n');
+    write(root, `${dev}/class`, '0x030000\n');
+    write(root, `${dev}/power/control`, 'auto\n');
+    write(root, `${dev}/power/runtime_status`, 'suspended\n');
+    const calls = `${root}/smi-calls`;
+    const smi = `${root}/nvidia-smi`;
+    write(root, 'nvidia-smi', `#!/bin/sh\necho "$*" >> '${calls}'\necho '0, 42, 61, 2048, NVIDIA RTX 4000 Ada Generation Laptop GPU'\n`);
+    GLib.spawn_command_line_sync(`chmod +x '${smi}'`);
+    let t = 1_000_000;
+    const smp = new S.Sampler({root, smi, clock: () => t});
+    const ncalls = () => (S.readText(calls) || '').split('\n').filter(Boolean).length;
+    const settle = () => {
+        const ctx = GLib.MainContext.default();
+        const end = GLib.get_monotonic_time() + 3_000_000;
+        while (smp._nvBusy && GLib.get_monotonic_time() < end) ctx.iteration(true);
+    };
+    let s = smp.sample();
+    check('nvidia sleep: no nvidia-smi while the GPU sleeps', ncalls() === 0, `${ncalls()} calls`);
+    check('nvidia sleep: a sleeping GPU shows 0 % and "asleep"', s.gpuPercent === 0 && /asleep/.test(s.gpus[0]?.name), JSON.stringify(s.gpus));
+    write(root, `${dev}/power/runtime_status`, 'active\n');
+    t += 2000; s = smp.sample(); settle();
+    check('nvidia sleep: no query in the first 25 s awake', ncalls() === 0, `${ncalls()} calls`);
+    check('nvidia sleep: an awake GPU is no longer labelled asleep', !/asleep/.test(s.gpus[0]?.name || ''), JSON.stringify(s.gpus));
+    t += 25000; smp.sample(); settle();
+    check('nvidia sleep: 1 one-shot query after 25 s awake', ncalls() === 1 && !/-lms/.test(S.readText(calls)), S.readText(calls));
+    s = smp.sample();
+    check('nvidia sleep: the query result is shown', s.gpuPercent === 42 && s.gpuTempC === 61, `${s.gpuPercent} ${s.gpuTempC}`);
+    t += 10000; smp.sample(); settle();
+    check('nvidia sleep: at most 1 query per 30 s', ncalls() === 1, `${ncalls()} calls`);
+    t += 21000; smp.sample(); settle();
+    check('nvidia sleep: next query after 30 s', ncalls() === 2, `${ncalls()} calls`);
+    smp.destroy();
+    // An awake GPU with no reading yet is queried once at start, so the GPU cell and name appear.
+    const smp2 = new S.Sampler({root, smi, clock: () => t});
+    smp2.sample();
+    const ctx = GLib.MainContext.default(), end = GLib.get_monotonic_time() + 3_000_000;
+    while (smp2._nvBusy && GLib.get_monotonic_time() < end) ctx.iteration(true);
+    s = smp2.sample();
+    check('nvidia sleep: an awake GPU is read once at start', ncalls() === 3 && s.gpuPercent === 42, `${ncalls()} calls, ${s.gpuPercent}`);
+    t += 2000; s = smp2.sample();
+    check('nvidia sleep: between queries the last reading stays', ncalls() === 3 && s.gpuPercent === 42, `${ncalls()} calls, ${s.gpuPercent}`);
+    smp2.destroy();
+}
+
 // ---------------------------------------------------------------- cells
 const hot = {...M.emptySnapshot(), cpuTempC: 93, cpuPercent: 96, ramPercent: 91, gpuPercent: 97, gpus: [{name: 'GPU', percent: 97, tempC: 86, memUsedGB: 7}], gpuTempC: 86};
 let cells = M.buildCells(hot);
