@@ -1,0 +1,4 @@
+windows/bin/
+macos/build/
+linux/tests/out/
+*.log

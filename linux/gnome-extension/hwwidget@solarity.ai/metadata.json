@@ -1,0 +1,7 @@
+{
+  "uuid": "hwwidget@solarity.ai",
+  "name": "HW Widget",
+  "description": "A small, colorful top-bar pill with CPU temperature, CPU, memory and GPU (or disk) load. Click it for details: GPU temperature and VRAM, disk activity and network speed. No root needed.",
+  "shell-version": ["45", "46", "47", "48", "49"],
+  "version": 1
+}

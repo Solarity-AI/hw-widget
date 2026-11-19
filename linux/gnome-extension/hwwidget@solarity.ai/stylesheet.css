@@ -1,0 +1,13 @@
+.hwwidget-pill {
+  margin: 0 2px;
+}
+
+.hwwidget-card-item {
+  padding: 4px 6px;
+  spacing: 0;
+}
+
+.hwwidget-card-item:hover,
+.hwwidget-card-item:active {
+  background-color: transparent;
+}

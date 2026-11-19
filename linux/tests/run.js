@@ -1,0 +1,159 @@
+// HW Widget Linux tests: run with `gjs -m linux/tests/run.js <png-output-dir>` (see linux/tests/run-docker.sh).
+// Builds fake /proc and /sys trees, checks parsers, temperature choice, the sampler and the cell model,
+// then renders the pill and the card to PNG with the real drawing code.
+import GLib from 'gi://GLib';
+import Cairo from 'cairo';
+import System from 'system';
+import * as M from '../gnome-extension/hwwidget@solarity.ai/model.js';
+import * as S from '../gnome-extension/hwwidget@solarity.ai/sensors.js';
+import * as R from '../gnome-extension/hwwidget@solarity.ai/render.js';
+
+let pass = 0, fail = 0;
+function check(name, ok, detail = '') {
+    if (ok) pass++;
+    else fail++;
+    print(`${ok ? 'PASS' : 'FAIL'} ${name}${ok || !detail ? '' : `  -> ${detail}`}`);
+}
+const near = (a, b, eps = 0.05) => Math.abs(a - b) <= eps;
+
+function write(root, rel, text) {
+    const path = `${root}/${rel}`;
+    GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o755);
+    GLib.file_set_contents(path, text);
+}
+
+function fakeRoot(kind) {
+    const root = GLib.dir_make_tmp('hwwidget-XXXXXX');
+    write(root, 'proc/stat', 'cpu  100 0 100 800 0 0 0 0 0 0\ncpu0 50 0 50 400 0 0 0 0 0 0\n');
+    write(root, 'proc/meminfo', 'MemTotal:       16384000 kB\nMemFree:         1000000 kB\nMemAvailable:    4096000 kB\n');
+    write(root, 'proc/cpuinfo', kind === 'arm' ? 'processor\t: 0\nModel\t\t: Raspberry Pi 5 Model B Rev 1.0\n' : 'model name\t: AMD Ryzen 7 7840U w/ Radeon 780M Graphics\n');
+    write(root, 'proc/diskstats', '   8       0 sda 100 0 0 0 0 0 0 0 0 1000 0\n   8       1 sda1 1 0 0 0 0 0 0 0 0 999999 0\n 259       0 nvme0n1 5 0 0 0 0 0 0 0 0 5000 0\n   7       0 loop0 0 0 0 0 0 0 0 0 0 99999 0\n');
+    write(root, 'proc/net/dev', 'Inter-|   Receive\n face |bytes packets\n    lo: 999999 1 0 0 0 0 0 0 999999 0 0 0 0 0 0 0\n  eth0: 1000 1 0 0 0 0 0 0 500 0 0 0 0 0 0 0\ndocker0: 777777 1 0 0 0 0 0 0 777777 0 0 0 0 0 0 0\n');
+    if (kind === 'intel') {
+        write(root, 'sys/class/hwmon/hwmon0/name', 'acpitz\n');
+        write(root, 'sys/class/hwmon/hwmon0/temp1_input', '27800\n');
+        write(root, 'sys/class/hwmon/hwmon3/name', 'coretemp\n');
+        write(root, 'sys/class/hwmon/hwmon3/temp1_label', 'Package id 0\n');
+        write(root, 'sys/class/hwmon/hwmon3/temp1_input', '64000\n');
+        write(root, 'sys/class/hwmon/hwmon3/temp2_label', 'Core 0\n');
+        write(root, 'sys/class/hwmon/hwmon3/temp2_input', '71000\n');
+    } else if (kind === 'amd') {
+        write(root, 'sys/class/hwmon/hwmon1/name', 'k10temp\n');
+        write(root, 'sys/class/hwmon/hwmon1/temp1_label', 'Tctl\n');
+        write(root, 'sys/class/hwmon/hwmon1/temp1_input', '58250\n');
+        write(root, 'sys/class/hwmon/hwmon2/name', 'amdgpu\n');
+        write(root, 'sys/class/hwmon/hwmon2/temp1_label', 'edge\n');
+        write(root, 'sys/class/hwmon/hwmon2/temp1_input', '47000\n');
+        write(root, 'sys/class/drm/card1/device/gpu_busy_percent', '37\n');
+        write(root, 'sys/class/drm/card1/device/mem_info_vram_used', `${512 * 1024 * 1024}\n`);
+        write(root, 'sys/class/drm/card1/device/mem_info_vram_total', `${512 * 1024 * 1024}\n`);
+    } else if (kind === 'arm') {
+        write(root, 'sys/class/thermal/thermal_zone0/type', 'cpu-thermal\n');
+        write(root, 'sys/class/thermal/thermal_zone0/temp', '49950\n');
+    }
+    return root;
+}
+
+function rmrf(path) {
+    GLib.spawn_command_line_sync(`rm -rf ${GLib.shell_quote(path)}`);
+}
+
+// ---------------------------------------------------------------- parsers
+check('cpu: 20% busy between two /proc/stat samples',
+    near(S.cpuPercent(S.parseCpuTimes('cpu 100 0 100 800 0 0 0 0'), S.parseCpuTimes('cpu 120 0 120 960 0 0 0 0')), 20));
+check('cpu: no previous sample -> NaN', Number.isNaN(S.cpuPercent(null, S.parseCpuTimes('cpu 1 1 1 1'))));
+const mem = S.parseMeminfo('MemTotal: 16384000 kB\nMemAvailable: 4096000 kB\n');
+check('mem: 75% used', near(mem.percent, 75) && near(mem.totalGB, 15.625, 0.01));
+check('mem: old kernels without MemAvailable', near(S.parseMeminfo('MemTotal: 1000 kB\nMemFree: 200 kB\nBuffers: 100 kB\nCached: 200 kB\n').percent, 50));
+const d1 = S.parseDiskstats('8 0 sda 1 0 0 0 0 0 0 0 0 1000 0\n8 1 sda1 1 0 0 0 0 0 0 0 0 1000 0\n7 0 loop0 0 0 0 0 0 0 0 0 0 5 0');
+check('disk: whole disks only (no partitions, no loop)', Object.keys(d1).join() === 'sda');
+check('disk: 25% busy over 2 s', near(S.diskBusy({sda: 1000}, {sda: 1500}, 2000), 25));
+const net = S.parseNetDev('  lo: 5 0 0 0 0 0 0 0 5\n eth0: 100 1 0 0 0 0 0 0 40\n wlan0: 50 1 0 0 0 0 0 0 10\n veth12: 9 0 0 0 0 0 0 0 9\n');
+check('net: sums real NICs, skips lo/veth', net.rx === 150 && net.tx === 50);
+const nv = S.parseNvidiaLine('0, 37, 61, 2048, NVIDIA GeForce RTX 4070');
+check('nvidia: csv line', nv.index === 0 && nv.percent === 37 && nv.tempC === 61 && nv.memUsedGB === 2 && nv.name === 'NVIDIA GeForce RTX 4070');
+check('nvidia: [N/A] fields become NaN', Number.isNaN(S.parseNvidiaLine('1, [N/A], [N/A], 0, NVIDIA GB10').percent));
+check('cpu name: x86 and Raspberry Pi', S.cpuNameFrom('model name\t: Intel i7\n') === 'Intel i7' && S.cpuNameFrom('Model\t: Raspberry Pi 5\n') === 'Raspberry Pi 5');
+
+// ---------------------------------------------------------------- temperature choice
+const pick = S.pickCpuTemp;
+check('temp: coretemp Package beats acpitz and hotter cores',
+    pick([{name: 'acpitz', temps: [{label: '', c: 27.8}]}, {name: 'coretemp', temps: [{label: 'Core 0', c: 71}, {label: 'Package id 0', c: 64}]}], [])?.c === 64);
+check('temp: k10temp Tctl', pick([{name: 'k10temp', temps: [{label: 'Tccd1', c: 50}, {label: 'Tctl', c: 58}]}], [])?.source === 'k10temp Tctl');
+check('temp: amdgpu is never the CPU', pick([{name: 'amdgpu', temps: [{label: 'edge', c: 47}]}], []) === null);
+check('temp: thermal zone fallback (x86_pkg_temp first)', pick([], [{type: 'acpitz', c: 30}, {type: 'x86_pkg_temp', c: 55}])?.c === 55);
+check('temp: ARM cpu-thermal zone', pick([], [{type: 'cpu-thermal', c: 49.95}])?.c === 49.95);
+check('temp: implausible values ignored', pick([{name: 'coretemp', temps: [{label: 'Package id 0', c: 0}]}], [{type: 'acpitz', c: 200}]) === null);
+
+// ---------------------------------------------------------------- sampler on fake trees
+for (const kind of ['intel', 'amd', 'arm', 'empty']) {
+    const root = fakeRoot(kind);
+    const smp = new S.Sampler({root, nvidia: false});
+    smp.sample();
+    write(root, 'proc/stat', 'cpu  130 0 130 840 0 0 0 0 0 0\n');   // +60 busy of +100 -> 60%
+    write(root, 'proc/diskstats', '   8       0 sda 100 0 0 0 0 0 0 0 0 1000 0\n 259       0 nvme0n1 5 0 0 0 0 0 0 0 0 5600 0\n');
+    write(root, 'proc/net/dev', '  eth0: 3000 1 0 0 0 0 0 0 900 0 0 0 0 0 0 0\n');
+    smp._prevAt = Date.now() - 2000;
+    const s = smp.sample();
+    smp.destroy();
+    rmrf(root);
+    check(`sampler/${kind}: CPU 60%`, near(s.cpuPercent, 60), s.cpuPercent);
+    check(`sampler/${kind}: RAM 75%`, near(s.ramPercent, 75), s.ramPercent);
+    check(`sampler/${kind}: busiest disk ~30%`, near(s.diskPercent, 30, 1.5), s.diskPercent);
+    check(`sampler/${kind}: download ~1000 B/s`, near(s.netDownBps, 1000, 60), s.netDownBps);
+    const want = {intel: 64, amd: 58.3, arm: 50, empty: NaN}[kind];
+    check(`sampler/${kind}: CPU temperature ${want}`, Number.isNaN(want) ? Number.isNaN(s.cpuTempC) : near(s.cpuTempC, want, 0.1), `${s.cpuTempC} (${s.cpuTempSource})`);
+    if (kind === 'amd') check('sampler/amd: Radeon GPU 37%, 47 C, integrated', s.gpuPercent === 37 && s.gpuTempC === 47 && s.gpus[0].integrated);
+}
+
+// ---------------------------------------------------------------- cells
+const hot = {...M.emptySnapshot(), cpuTempC: 93, cpuPercent: 96, ramPercent: 91, gpuPercent: 97, gpus: [{name: 'GPU', percent: 97, tempC: 86, memUsedGB: 7}], gpuTempC: 86};
+let cells = M.buildCells(hot);
+check('cells: TEMP CPU RAM GPU', cells.map(c => c.label).join() === 'TEMP,CPU,RAM,GPU');
+check('cells: hot levels all critical', cells.every(c => c.level === 2));
+cells = M.buildCells({...M.emptySnapshot(), cpuPercent: 3});
+check('cells: no GPU -> DISK, unknown values are dashes', cells[3].label === 'DISK' && cells[0].value === M.DASH && cells[1].value === '3%');
+check('cells: GPU temperature fallback is labelled', M.buildCells({...M.emptySnapshot(), gpuTempC: 50})[0].label === 'GPU°');
+check('fmt: 20 C -> 68 F', M.fmt.temp(20, true) === '68°');
+check('fmt: rate', M.fmt.rate(1536) === '1.5 KB/s' && M.fmt.rate(48e6) === '46 MB/s');
+
+// ---------------------------------------------------------------- render PNGs with the real drawing code
+const out = ARGV[0] || GLib.get_tmp_dir();
+GLib.mkdir_with_parents(out, 0o755);
+const normal = {...M.emptySnapshot(), cpuName: 'AMD Ryzen 7 7840U w/ Radeon 780M Graphics', cpuTempC: 61, cpuTempSource: 'k10temp Tctl',
+    cpuPercent: 23, ramPercent: 58, ramUsedGB: 18.6, ramTotalGB: 31.8, diskPercent: 4, netDownBps: 182e3, netUpBps: 21e3,
+    gpus: [{name: 'NVIDIA GeForce RTX 4070', percent: 12, tempC: 51, memUsedGB: 1.2}], gpuPercent: 12, gpuTempC: 51};
+const cases = {normal, hot: {...normal, ...hot, gpus: hot.gpus}, unknown: M.emptySnapshot()};
+for (const [name, snap] of Object.entries(cases)) {
+    for (const scale of [1, 2]) {
+        const cl = M.buildCells(snap);
+        const sz = R.pillSize(cl.length, scale);
+        const surf = new Cairo.ImageSurface(Cairo.Format.ARGB32, sz.w + 40 * scale, Math.ceil(40 * scale));
+        const cr = new Cairo.Context(surf);
+        cr.setSourceRGB(0.11, 0.11, 0.11);   // GNOME top bar
+        cr.paint();
+        cr.translate(20 * scale, (40 * scale - sz.h) / 2);
+        cr.scale(scale, scale);
+        R.drawPill(cr, cl, M.PALETTES.dark);
+        cr.$dispose();
+        surf.writeToPNG(`${out}/gnome-pill-${name}-${scale * 100}.png`);
+    }
+    for (const theme of ['dark', 'light']) {
+        const p = M.PALETTES[theme];
+        const rows = M.cardRows(snap, {palette: p});
+        const cs = R.cardSize(rows.length);
+        const surf = new Cairo.ImageSurface(Cairo.Format.ARGB32, cs.w + 24, cs.h + 24);
+        const cr = new Cairo.Context(surf);
+        if (theme === 'dark') cr.setSourceRGB(0.14, 0.14, 0.16);
+        else cr.setSourceRGB(0.96, 0.96, 0.97);
+        cr.paint();
+        cr.translate(12, 12);
+        R.drawCard(cr, rows, p, {footer: 'Updates every 2 s · no root needed'});
+        cr.$dispose();
+        surf.writeToPNG(`${out}/gnome-card-${theme}-${name}.png`);
+    }
+}
+check('render: PNGs written', GLib.file_test(`${out}/gnome-pill-normal-200.png`, GLib.FileTest.EXISTS));
+
+print(`${pass} passed, ${fail} failed`);
+System.exit(fail ? 1 : 0);
