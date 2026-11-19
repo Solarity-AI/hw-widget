@@ -93,13 +93,29 @@ namespace HwWidget
     // ------------------------------------------------------------------ the elevated loop (runs as SYSTEM)
     public static class SensorHelper
     {
+        // Single-instance lock: a file in the admin-only data folder that only SYSTEM and Administrators may open, so
+        // no other process can take it first (a Global\ named object can be created by any user while we are stopped).
+        // Returns null when another copy holds it or the folder is missing.
+        public static FileStream TryLock(string dir)
+        {
+            try
+            {
+                FileSecurity sec = new FileSecurity();
+                sec.SetAccessRuleProtection(true, false);
+                sec.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), FileSystemRights.FullControl, AccessControlType.Allow));
+                sec.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), FileSystemRights.FullControl, AccessControlType.Allow));
+                return new FileStream(Path.Combine(dir, "helper.lock"), FileMode.OpenOrCreate, FileSystemRights.ReadData | FileSystemRights.WriteData,
+                    FileShare.None, 1, FileOptions.DeleteOnClose, sec);
+            }
+            catch { return null; }
+        }
+
         public static int Run()
         {
-            bool created;
-            using (Mutex single = new Mutex(true, @"Global\HWWidget.SensorHelper", out created))
+            string dir = HelperFile.Dir, tmp = HelperFile.FilePath + ".tmp";
+            using (FileStream single = TryLock(dir))
             {
-                if (!created) return 0;
-                string dir = HelperFile.Dir, tmp = HelperFile.FilePath + ".tmp";
+                if (single == null) return 1;
                 while (true)
                 {
                     try
