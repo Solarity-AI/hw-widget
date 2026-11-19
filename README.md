@@ -64,14 +64,16 @@ The widget itself still runs without admin rights. It ignores readings older tha
 
 Turn the helper off from the same menu, which then reads **Remove CPU temperature helper (admin)**. `uninstall.ps1` also removes it.
 
-### Linux (GNOME Shell 45–49)
+### Linux (GNOME Shell 42–49)
 
 ```bash
 sh linux/install.sh
 ```
 
-On Wayland, log out and back in once if the script asks you to.
+Log out and back in once if the script asks you to.
+On GNOME 42–44 (for example Ubuntu 22.04) the script converts the extension to GNOME's older module format with `linux/legacy/convert.js`; it needs nothing extra.
 Sensors: `/proc` for CPU, memory, disk and network, `hwmon` and thermal zones for temperatures (Intel `coretemp`, AMD `k10temp`, ARM `cpu-thermal`), `nvidia-smi` for NVIDIA GPUs and `amdgpu` sysfs for AMD GPUs.
+On laptops whose NVIDIA GPU can sleep, the widget never wakes it: a sleeping GPU shows 0 % ("asleep" in the card), and an awake one is read at most every 30 s, only after it has been awake on its own for 25 s.
 Settings are saved in `~/.config/hwwidget/settings.json`.
 
 ### macOS 13 or later
@@ -90,7 +92,7 @@ Sensors: Mach host statistics (CPU, memory), IOKit (GPU load and memory, disk ac
 | Windows | `windows\build.ps1`, then `windows\bin\HWWidget.exe --selftest out.txt` | 29 sensor, helper, layout, formatting and accessibility checks |
 | Windows | `windows\tests\scripts-test.ps1` | 4 install and uninstall script checks (self-test gate, honest uninstall message) |
 | Windows | `HWWidget.exe --render <dir>` / `--probe <secs> <csv>` | PNG renders of every state / live sensor log |
-| Linux | `sh linux/tests/run-docker.sh` | 50 parser, sensor-tree and model checks and 2 install-script checks in Docker, plus PNG renders in `linux/tests/out` |
+| Linux | `sh linux/tests/run-docker.sh` | 62 parser, sensor-tree and model checks, 15 GNOME 42 module checks and 10 install-script checks, in Docker on Debian trixie (GNOME 45+) and Ubuntu 22.04 (GNOME 42), plus PNG renders in `linux/tests/out` |
 | macOS | `sh macos/tests/run-docker.sh` | 37 model and parser checks of the shared core, on Linux in Docker |
 | macOS | `HWWidget --self-test`, `--probe 10`, `--render <dir>` | The same checks, a live sensor log and PNG renders, on a Mac |
 
@@ -101,7 +103,7 @@ CI runs all 3 platforms on pull requests and on manual runs, each only when its 
 | Platform | Verified |
 | --- | --- |
 | Windows 11 | Running daily on a real laptop (Intel i7, NVIDIA Quadro): readings match Task Manager and `nvidia-smi` |
-| Linux / GNOME | Sensors, model and drawing tested in Docker; not yet run inside a live GNOME Shell session |
+| Linux / GNOME | Tested in Docker; the GNOME 42 build loads, draws and survives 5 disable/enable cycles in a headless GNOME Shell 42.9 on a real laptop (Intel Core, NVIDIA RTX 4000 Ada); not yet seen in a live desktop session |
 | macOS | Builds, self-test, live probe and renders pass on GitHub's macOS runner (a VM without temperature sensors); not yet run on a physical Mac |
 
 Reports from real GNOME and Mac machines are welcome as issues.
