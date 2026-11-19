@@ -106,6 +106,41 @@ for (const kind of ['intel', 'amd', 'arm', 'empty']) {
     if (kind === 'amd') check('sampler/amd: Radeon GPU 37%, 47 C, integrated', s.gpuPercent === 37 && s.gpuTempC === 47 && s.gpus[0].integrated);
 }
 
+// ---------------------------------------------------------------- regressions found by the QA bug hunt
+// QA: every AMD GPU showed the first amdgpu hwmon chip's temperature.
+{
+    const root = fakeRoot('empty');
+    for (const [card, hw, busy, temp] of [['card0', 'hwmon2', 5, 40000], ['card1', 'hwmon4', 80, 70000]]) {
+        write(root, `sys/class/drm/${card}/device/gpu_busy_percent`, `${busy}\n`);
+        write(root, `sys/class/drm/${card}/device/hwmon/${hw}/name`, 'amdgpu\n');
+        write(root, `sys/class/drm/${card}/device/hwmon/${hw}/temp1_label`, 'edge\n');
+        write(root, `sys/class/drm/${card}/device/hwmon/${hw}/temp1_input`, `${temp}\n`);
+        write(root, `sys/class/hwmon/${hw}/name`, 'amdgpu\n');
+        write(root, `sys/class/hwmon/${hw}/temp1_label`, 'edge\n');
+        write(root, `sys/class/hwmon/${hw}/temp1_input`, `${temp}\n`);
+    }
+    const smp = new S.Sampler({root, nvidia: false});
+    const s = smp.sample();
+    smp.destroy();
+    rmrf(root);
+    check('amd: each GPU gets its own temperature', s.gpus.map(g => g.tempC).join() === '40,70', s.gpus.map(g => g.tempC).join());
+}
+// QA: a network interface that appears between 2 samples added its whole byte history as 1 tick of speed.
+check('net: new interface adds no spike',
+    (d => d.rx === 2000 && d.tx === 400)(S.netDelta?.(S.parseNetDev('  eth0: 1000 1 0 0 0 0 0 0 500\n'),
+        S.parseNetDev('  eth0: 3000 1 0 0 0 0 0 0 900\n  usb0: 5000000000 1 0 0 0 0 0 0 4000000000\n')) || {}));
+check('net: removed interface and counter reset add nothing',
+    (d => d.rx === 0 && d.tx === 0)(S.netDelta?.(S.parseNetDev('  eth0: 9000 1 0 0 0 0 0 0 900\n  usb0: 50 1 0 0 0 0 0 0 40\n'),
+        S.parseNetDev('  eth0: 100 1 0 0 0 0 0 0 10\n')) || {rx: -1}));
+// QA: a hand-edited settings file with a non-boolean unit turned on Fahrenheit with no menu item checked.
+check('settings: invalid values fall back to defaults',
+    (s => s.fahrenheit === false && s.interval === 2 && s.fourth === 'auto')(M.normalizeSettings?.({fahrenheit: 'yes', interval: 3, fourth: 'cpu'}) || {}));
+check('settings: valid values kept',
+    (s => s.fahrenheit === true && s.interval === 5 && s.fourth === 'disk')(M.normalizeSettings?.({fahrenheit: true, interval: 5, fourth: 'disk'}) || {}));
+// QA: the pill had no accessible name, so screen readers announced nothing.
+check('a11y: pill reads as text', M.accessibleText?.(M.buildCells({...M.emptySnapshot(), cpuTempC: 61, cpuPercent: 23, ramPercent: 58})) ===
+    'TEMP 61°, CPU 23%, RAM 58%, DISK unknown', M.accessibleText?.(M.buildCells({...M.emptySnapshot(), cpuTempC: 61, cpuPercent: 23, ramPercent: 58})));
+
 // ---------------------------------------------------------------- cells
 const hot = {...M.emptySnapshot(), cpuTempC: 93, cpuPercent: 96, ramPercent: 91, gpuPercent: 97, gpus: [{name: 'GPU', percent: 97, tempC: 86, memUsedGB: 7}], gpuTempC: 86};
 let cells = M.buildCells(hot);

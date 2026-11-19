@@ -199,3 +199,18 @@ export function cardRows(s, {fahrenheit = false, palette = PALETTES.dark} = {}) 
     });
     return rows;
 }
+
+// What a screen reader announces for the pill: "TEMP 61°, CPU 23%, RAM 58%, DISK unknown".
+export function accessibleText(cells) {
+    return cells.map(c => `${c.label} ${c.value === DASH ? 'unknown' : c.value}`).join(', ');
+}
+
+// Settings read from disk, with each wrong or missing value replaced by its default (°C, 2 s, auto).
+export function normalizeSettings(raw) {
+    const r = raw && typeof raw === 'object' ? raw : {};
+    return {
+        interval: [1, 2, 5].includes(r.interval) ? r.interval : 2,
+        fahrenheit: r.fahrenheit === true,
+        fourth: ['auto', 'gpu', 'disk'].includes(r.fourth) ? r.fourth : 'auto',
+    };
+}
