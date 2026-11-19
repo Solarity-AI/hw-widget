@@ -160,6 +160,8 @@ namespace HwWidget
         public const string TaskName = "HW Widget CPU temperature helper";
         static string BinDir { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "HWWidget"); } }
         static string BinPath { get { return Path.Combine(BinDir, "HWWidgetSensor.exe"); } }
+        // The task definition is written beside the helper exe and deleted after schtasks reads it.
+        internal static string TaskXmlPath { get { return Path.Combine(BinDir, "task.xml"); } }
 
         public static bool Installed { get { try { return File.Exists(BinPath); } catch { return false; } } }
 
@@ -213,7 +215,7 @@ namespace HwWidget
             if (Directory.Exists(HelperFile.Dir)) Directory.Delete(HelperFile.Dir, true);
             Directory.CreateDirectory(HelperFile.Dir, sec);
 
-            string xml = Path.Combine(Path.GetTempPath(), "hwwidget-task.xml");
+            string xml = TaskXmlPath;
             File.WriteAllText(xml, TaskXml(BinPath), Encoding.Unicode);
             int rc = Schtasks("/Create /F /TN \"" + TaskName + "\" /XML \"" + xml + "\"");
             try { File.Delete(xml); } catch { }

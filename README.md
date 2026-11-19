@@ -42,6 +42,7 @@ powershell -ExecutionPolicy Bypass -File windows\uninstall.ps1
 ```
 
 Sensors: Performance counters (CPU, memory, disk), the Windows graphics kernel (GPU load and temperature, as Task Manager shows them), NVIDIA NVML as a fallback, ACPI thermal zones for the CPU temperature, and [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) when it is running.
+It uses under 1 % of 1 core and about 45 MB of memory, and hides itself while a full-screen app is in front.
 
 #### No CPU temperature? Enable the helper (1 admin prompt)
 
@@ -62,7 +63,6 @@ After 1 UAC prompt, this does 3 things:
 The widget itself still runs without admin rights. It ignores readings older than 15 seconds.
 
 Turn the helper off from the same menu, which then reads **Remove CPU temperature helper (admin)**. `uninstall.ps1` also removes it.
-It uses under 1 % of 1 core and about 45 MB of memory, and hides itself while a full-screen app is in front.
 
 ### Linux (GNOME Shell 45–49)
 
@@ -87,10 +87,11 @@ Sensors: Mach host statistics (CPU, memory), IOKit (GPU load and memory, disk ac
 
 | Platform | Command | What it checks |
 | --- | --- | --- |
-| Windows | `windows\build.ps1`, then `windows\bin\HWWidget.exe --selftest out.txt` | 23 sensor, helper, layout and formatting checks |
+| Windows | `windows\build.ps1`, then `windows\bin\HWWidget.exe --selftest out.txt` | 26 sensor, helper, layout, formatting and accessibility checks |
+| Windows | `windows\tests\scripts-test.ps1` | 4 install and uninstall script checks (self-test gate, honest uninstall message) |
 | Windows | `HWWidget.exe --render <dir>` / `--probe <secs> <csv>` | PNG renders of every state / live sensor log |
-| Linux | `sh linux/tests/run-docker.sh` | 44 parser, sensor-tree and model checks in Docker, plus PNG renders in `linux/tests/out` |
-| macOS | `sh macos/tests/run-docker.sh` | 35 model and parser checks of the shared core, on Linux in Docker |
+| Linux | `sh linux/tests/run-docker.sh` | 50 parser, sensor-tree and model checks and 2 install-script checks in Docker, plus PNG renders in `linux/tests/out` |
+| macOS | `sh macos/tests/run-docker.sh` | 37 model and parser checks of the shared core, on Linux in Docker |
 | macOS | `HWWidget --self-test`, `--probe 10`, `--render <dir>` | The same checks, a live sensor log and PNG renders, on a Mac |
 
 CI runs all 3 platforms on pull requests and on manual runs, each only when its folder changes.

@@ -294,6 +294,8 @@ namespace HwWidget
         {
             if (stopping) return;
             Cell[] cells = CurrentCells();
+            string spoken = Painter.AccessibleText(cells);
+            if (spoken != AccessibleName) { AccessibleName = spoken; Text = "HW Widget: " + spoken; }
             if (!hiddenForShell)
             {
                 using (Bitmap b = Painter.Pill(cells, Palette.For(dark), scale, hover || dragging)) Present(b, pos.X, pos.Y);
@@ -642,6 +644,7 @@ namespace HwWidget
         }
 
         static string D(double v) { return double.IsNaN(v) ? "" : v.ToString("0.##", CultureInfo.InvariantCulture); }
+        internal static string Unit(double v, string unit) { return double.IsNaN(v) ? Fmt.Dash : D(v) + unit; }
         static string Q(string s) { return "\"" + (s ?? "").Replace("\"", "'") + "\""; }
 
         public static int Probe(int secs, string csv)
@@ -657,7 +660,7 @@ namespace HwWidget
                     HwSnapshot s = smp.Sample();
                     sw.Stop();
                     List<string> gp = new List<string>();
-                    foreach (GpuInfo g in s.Gpus) gp.Add(g.Name + " " + D(g.Percent) + "% " + D(g.TempC) + "C " + D(g.MemUsedGB) + "GB");
+                    foreach (GpuInfo g in s.Gpus) gp.Add(g.Name + " " + D(g.Percent) + "% " + Unit(g.TempC, "C") + " " + D(g.MemUsedGB) + "GB");
                     w.WriteLine(string.Join(",", new string[] {
                         s.TakenUtc.ToString("o"), sw.Elapsed.TotalMilliseconds.ToString("0.0", CultureInfo.InvariantCulture),
                         D(s.CpuPercent), D(s.CpuTempC), Q(s.CpuTempSource), D(s.RamPercent), D(s.RamUsedGB),
@@ -713,6 +716,12 @@ namespace HwWidget
             check("helper file: garbage and implausible values ignored", double.IsNaN(HelperFile.Parse("hello", now, out hs)) && double.IsNaN(HelperFile.Parse(HelperFile.Format(now, 140, "x"), now, out hs)));
             HwSnapshot hinted = Fake("normal"); hinted.CpuTempC = double.NaN; hinted.Gpus = new GpuInfo[0]; hinted.GpuTempC = double.NaN; hinted.CpuTempHint = "Right-click and choose Enable CPU temperature";
             check("cells: no temperature at all is a dash", Painter.Cells(hinted, false, Fourth.Auto, Palette.For(true))[0].Value == Fmt.Temp(double.NaN, false));
+
+            HwSnapshot spoken = new HwSnapshot(); spoken.CpuTempC = 61; spoken.CpuPercent = 23; spoken.RamPercent = 58; spoken.DiskPercent = double.NaN;
+            check("a11y: pill reads as text", Painter.AccessibleText(Painter.Cells(spoken, false, Fourth.Disk, Palette.For(true))) == "TEMP 61°, CPU 23%, RAM 58%, DISK unknown");
+            check("probe: unknown temperature is a dash", Unit(double.NaN, "C") == "—" && Unit(51, "C") == "51C");
+            string tmp = Path.GetFullPath(Path.GetTempPath()), pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            check("helper: task XML sits beside the helper exe", HelperSetup.TaskXmlPath.StartsWith(pf, StringComparison.OrdinalIgnoreCase) && !HelperSetup.TaskXmlPath.StartsWith(tmp, StringComparison.OrdinalIgnoreCase));
 
             Size ps = Painter.PillSize(4, 1.25f);
             check("pill: 192x34 DIP -> 240x43 px at 125%", ps.Width == 240 && ps.Height == 43);

@@ -146,6 +146,14 @@ namespace HwWidget
             return s.Gpus.Length > 0 && !double.IsNaN(s.GpuPercent);
         }
 
+        // What a screen reader announces for the pill: "TEMP 61°, CPU 23%, RAM 58%, DISK unknown".
+        public static string AccessibleText(Cell[] cells)
+        {
+            List<string> parts = new List<string>();
+            foreach (Cell c in cells) parts.Add(c.Label + " " + (c.Value == Fmt.Dash ? "unknown" : c.Value));
+            return string.Join(", ", parts.ToArray());
+        }
+
         public static Cell[] Cells(HwSnapshot s, bool fahrenheit, Fourth fourth, Palette p)
         {
             List<Cell> cells = new List<Cell>();

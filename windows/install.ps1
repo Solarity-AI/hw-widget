@@ -8,10 +8,9 @@ Get-Process HWWidget -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 300
 & (Join-Path $PSScriptRoot 'build.ps1') -Out $exe
 if ($LASTEXITCODE -ne 0) { exit 1 }
+. (Join-Path $PSScriptRoot 'lib.ps1')
 $report = Join-Path $env:TEMP 'hwwidget-selftest.txt'
-Start-Process $exe -ArgumentList '--selftest', "`"$report`"" -Wait
-$last = Get-Content $report -Tail 1
-if ($last -notmatch ' 0 failed') { Write-Host "❌ Self-test failed: $last (details in $report)" -ForegroundColor Red; exit 1 }
+try { $last = Invoke-SelfTestGate $exe $report } catch { Write-Host "❌ Self-test failed: $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
 Write-Host "✅ Self-test: $last" -ForegroundColor Green
 Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'HWWidget' -Value "`"$exe`""
 Start-Process $exe

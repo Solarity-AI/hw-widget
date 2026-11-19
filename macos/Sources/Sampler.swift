@@ -7,7 +7,7 @@ import IOKit
 final class Sampler {
     private var prevTicks: [UInt64]?
     private var prevDisk: [String: UInt64]?
-    private var prevNet: (rx: UInt64, tx: UInt64)?
+    private var prevNet: NetCounters?
     private var prevAt: Date?
     private let cpuName: String
     private let hid = HidThermal()
@@ -41,8 +41,9 @@ final class Sampler {
 
         let net = netBytes()
         if let p = prevNet, ms > 0 {
-            s.netDownBps = Double(counterDelta(p.rx, net.rx)) / ms * 1000
-            s.netUpBps = Double(counterDelta(p.tx, net.tx)) / ms * 1000
+            let d = netDelta(p, net)
+            s.netDownBps = Double(d.rx) / ms * 1000
+            s.netUpBps = Double(d.tx) / ms * 1000
         }
         prevNet = net
         prevAt = now
@@ -152,20 +153,21 @@ final class Sampler {
 
     // MARK: Network
 
-    private func netBytes() -> (rx: UInt64, tx: UInt64) {
-        var rx: UInt64 = 0, tx: UInt64 = 0
+    private func netBytes() -> NetCounters {
+        var out: NetCounters = [:]
         var head: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&head) == 0 else { return (0, 0) }
+        guard getifaddrs(&head) == 0 else { return [:] }
         defer { freeifaddrs(head) }
         var p = head
         while let a = p {
             defer { p = a.pointee.ifa_next }
+            let name = String(cString: a.pointee.ifa_name)
             guard let sa = a.pointee.ifa_addr, sa.pointee.sa_family == UInt8(AF_LINK), let data = a.pointee.ifa_data,
-                  countsInterface(String(cString: a.pointee.ifa_name)) else { continue }
+                  countsInterface(name) else { continue }
             let d = data.assumingMemoryBound(to: if_data.self).pointee
-            rx += UInt64(d.ifi_ibytes); tx += UInt64(d.ifi_obytes)
+            out[name] = (rx: UInt64(d.ifi_ibytes), tx: UInt64(d.ifi_obytes))
         }
-        return (rx, tx)
+        return out
     }
 }
 

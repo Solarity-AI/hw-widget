@@ -8,7 +8,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
-import {PALETTES, buildCells, cardRows} from './model.js';
+import {PALETTES, buildCells, cardRows, accessibleText, normalizeSettings} from './model.js';
 import {PILL, pillSize, drawPill, cardSize, drawCard} from './render.js';
 import {Sampler} from './sensors.js';
 
@@ -17,14 +17,12 @@ const CONFIG_FILE = GLib.build_filenamev([CONFIG_DIR, 'settings.json']);
 
 function loadSettings() {
     // Celsius by default everywhere; Fahrenheit only when chosen in the menu.
-    const s = {interval: 2, fahrenheit: false, fourth: 'auto'};
+    let raw = null;
     try {
         const [ok, bytes] = GLib.file_get_contents(CONFIG_FILE);
-        if (ok) Object.assign(s, JSON.parse(new TextDecoder().decode(bytes)));
+        if (ok) raw = JSON.parse(new TextDecoder().decode(bytes));
     } catch {}
-    if (![1, 2, 5].includes(s.interval)) s.interval = 2;
-    if (!['auto', 'gpu', 'disk'].includes(s.fourth)) s.fourth = 'auto';
-    return s;
+    return normalizeSettings(raw);
 }
 
 function saveSettings(s) {
@@ -75,6 +73,7 @@ class HwIndicator extends PanelMenu.Button {
         this._iface = new Gio.Settings({schema_id: 'org.gnome.desktop.interface'});
         this._ifaceId = this._iface.connect('changed::color-scheme', () => this._card.queue_repaint());
         this._resize();
+        this.accessible_name = accessibleText(this._cells());
         this._restartTimer();
     }
 
@@ -153,6 +152,7 @@ class HwIndicator extends PanelMenu.Button {
             }
         }
         this._resize();
+        this.accessible_name = accessibleText(this._cells());
         this._pill.queue_repaint();
         if (this.menu.isOpen) this._card.queue_repaint();
     }

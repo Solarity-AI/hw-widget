@@ -26,6 +26,16 @@ export function listDir(path) {
     return out.sort();
 }
 
+// One hwmon chip folder -> {name, dir, temps: [{label, c}]}
+export function readChip(dir) {
+    const name = (readText(`${dir}/name`) || '').trim();
+    const temps = listDir(dir).filter(f => /^temp\d+_input$/.test(f)).map(f => {
+        const label = (readText(`${dir}/${f.replace('_input', '_label')}`) || '').trim();
+        return {label, c: Number((readText(`${dir}/${f}`) || '').trim()) / 1000};
+    });
+    return {name, dir, temps};
+}
+
 // ---------------------------------------------------------------- pure parsers (unit-tested)
 export function parseCpuTimes(stat) {
     const line = (stat || '').split('\n').find(l => l.startsWith('cpu '));
@@ -88,15 +98,31 @@ const NET_SKIP = /^(lo|docker\d*|veth|br-|virbr|vnet|tap|tun|wg|zt|tailscale|cni
 
 export function parseNetDev(text) {
     let rx = 0, tx = 0, n = 0;
+    const ifaces = {};
     for (const l of (text || '').split('\n')) {
         const m = /^\s*([^:\s]+):\s*(.*)$/.exec(l);
         if (!m || NET_SKIP.test(m[1])) continue;
         const f = m[2].trim().split(/\s+/).map(Number);
+        ifaces[m[1]] = {rx: f[0] || 0, tx: f[8] || 0};
         rx += f[0] || 0;
         tx += f[8] || 0;
         n++;
     }
-    return n ? {rx, tx} : null;
+    return n ? {rx, tx, ifaces} : null;
+}
+
+// Bytes moved between 2 parseNetDev samples, counted per interface: an interface that appears or
+// disappears between the samples, or whose counter went backwards (driver reset), adds nothing.
+export function netDelta(prev, cur) {
+    const d = {rx: 0, tx: 0};
+    if (!prev || !cur) return d;
+    for (const [name, c] of Object.entries(cur.ifaces || {})) {
+        const p = (prev.ifaces || {})[name];
+        if (!p) continue;
+        if (c.rx >= p.rx) d.rx += c.rx - p.rx;
+        if (c.tx >= p.tx) d.tx += c.tx - p.tx;
+    }
+    return d;
 }
 
 // hwmon chips in preference order, with the sensor label to prefer inside each chip.
@@ -190,15 +216,7 @@ export class Sampler {
 
     _hwmon() {
         const base = this._p('sys/class/hwmon');
-        return listDir(base).map(h => {
-            const dir = `${base}/${h}`;
-            const name = (readText(`${dir}/name`) || '').trim();
-            const temps = listDir(dir).filter(f => /^temp\d+_input$/.test(f)).map(f => {
-                const label = (readText(`${dir}/${f.replace('_input', '_label')}`) || '').trim();
-                return {label, c: Number((readText(`${dir}/${f}`) || '').trim()) / 1000};
-            });
-            return {name, dir, temps};
-        });
+        return listDir(base).map(h => readChip(`${base}/${h}`));
     }
 
     _zones() {
@@ -220,7 +238,10 @@ export class Sampler {
             if (vram !== null) g.memUsedGB = Number(vram.trim()) / 1024 ** 3;
             const total = readText(`${base}/${card}/device/mem_info_vram_total`);
             if (total !== null && Number(total.trim()) < 1024 ** 3) g.integrated = true;
-            const chip = chips.find(c => c.name === 'amdgpu' && c.temps.length);
+            // Each card's own sensor sits under its device; the first amdgpu chip is only a fallback
+            // for kernels that don't link it there.
+            const own = listDir(`${base}/${card}/device/hwmon`).map(h => readChip(`${base}/${card}/device/hwmon/${h}`));
+            const chip = own.find(c => c.temps.length) || chips.find(c => c.name === 'amdgpu' && c.temps.length);
             if (chip) g.tempC = (chip.temps.find(t => /edge/i.test(t.label)) || chip.temps[0]).c;
             out.push(g);
         }
@@ -257,8 +278,9 @@ export class Sampler {
 
         const net = parseNetDev(readText(this._p('proc/net/dev')));
         if (net && this._prevNet && elapsed > 0) {
-            s.netDownBps = Math.max(0, (net.rx - this._prevNet.rx) * 1000 / elapsed);
-            s.netUpBps = Math.max(0, (net.tx - this._prevNet.tx) * 1000 / elapsed);
+            const d = netDelta(this._prevNet, net);
+            s.netDownBps = d.rx * 1000 / elapsed;
+            s.netUpBps = d.tx * 1000 / elapsed;
         }
         this._prevNet = net;
         this._prevAt = now;

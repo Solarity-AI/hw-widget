@@ -248,6 +248,20 @@ func counterDelta(_ prev: UInt64, _ cur: UInt64, wrap: UInt64 = 1 << 32) -> UInt
     cur >= prev ? cur - prev : cur + wrap - prev
 }
 
+/// Bytes per interface name, as read from getifaddrs.
+typealias NetCounters = [String: (rx: UInt64, tx: UInt64)]
+
+/// Bytes moved between 2 samples, counted per interface so an interface that appears or goes away
+/// (a USB or Thunderbolt adapter unplugged) adds nothing instead of looking like a counter wrap.
+func netDelta(_ prev: NetCounters, _ cur: NetCounters) -> (rx: UInt64, tx: UInt64) {
+    var rx: UInt64 = 0, tx: UInt64 = 0
+    for (name, c) in cur {
+        guard let p = prev[name] else { continue }
+        rx += counterDelta(p.rx, c.rx); tx += counterDelta(p.tx, c.tx)
+    }
+    return (rx, tx)
+}
+
 /// Interfaces that carry real traffic: Ethernet/Wi-Fi (en*), not loopback, VPN tunnels, AWDL or bridges.
 func countsInterface(_ name: String) -> Bool { name.hasPrefix("en") }
 
@@ -309,6 +323,9 @@ func coreSelfTest() -> (passed: Int, failed: Int) {
     check("disk: busiest drive 25% over 2 s", abs(diskBusy(["disk0": 0, "disk1": 0], ["disk0": 500_000_000, "disk1": 100], ms: 2000) - 25) < 0.01)
     check("disk: first sample -> NaN", diskBusy(nil, ["disk0": 1], ms: 2000).isNaN)
     check("net: 32-bit wrap", counterDelta(4_294_967_000, 200) == 496)
+    let twoIfaces: NetCounters = ["en0": (rx: 1_000, tx: 500), "en5": (rx: 3_000_000_000, tx: 9_000)]
+    check("net: interface unplugged -> no spike", netDelta(twoIfaces, ["en0": (rx: 1_400, tx: 600)]) == (400, 100))
+    check("net: interface plugged in -> counted from its next sample", netDelta(["en0": (rx: 1_000, tx: 500)], twoIfaces) == (0, 0))
     check("net: en* only", countsInterface("en0") && !countsInterface("lo0") && !countsInterface("utun3") && !countsInterface("awdl0") && !countsInterface("bridge0"))
 
     let hid: [(name: String, c: Double)] = [("PMU tdie1", 50), ("PMU tdie2", 54), ("pACC MTR Temp Sensor2", 70), ("GPU MTR Temp Sensor1", 44), ("NAND CH0 temp", 33), ("PMU tcal", 0)]

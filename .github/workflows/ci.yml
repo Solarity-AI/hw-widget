@@ -47,6 +47,8 @@ jobs:
           Start-Process windows/bin/HWWidget.exe -ArgumentList '--selftest', "$env:RUNNER_TEMP\selftest.txt" -Wait
           Get-Content "$env:RUNNER_TEMP\selftest.txt"
           if ((Get-Content "$env:RUNNER_TEMP\selftest.txt" -Tail 1) -notmatch ' 0 failed') { exit 1 }
+          powershell -NoProfile -ExecutionPolicy Bypass -File windows/tests/scripts-test.ps1
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           Start-Process windows/bin/HWWidget.exe -ArgumentList '--render', "$env:RUNNER_TEMP\render" -Wait
       - uses: actions/upload-artifact@v4
         with:
