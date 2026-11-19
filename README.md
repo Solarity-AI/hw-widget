@@ -87,7 +87,7 @@ Sensors: Mach host statistics (CPU, memory), IOKit (GPU load and memory, disk ac
 
 | Platform | Command | What it checks |
 | --- | --- | --- |
-| Windows | `windows\build.ps1`, then `windows\bin\HWWidget.exe --selftest out.txt` | 26 sensor, helper, layout, formatting and accessibility checks |
+| Windows | `windows\build.ps1`, then `windows\bin\HWWidget.exe --selftest out.txt` | 29 sensor, helper, layout, formatting and accessibility checks |
 | Windows | `windows\tests\scripts-test.ps1` | 4 install and uninstall script checks (self-test gate, honest uninstall message) |
 | Windows | `HWWidget.exe --render <dir>` / `--probe <secs> <csv>` | PNG renders of every state / live sensor log |
 | Linux | `sh linux/tests/run-docker.sh` | 50 parser, sensor-tree and model checks and 2 install-script checks in Docker, plus PNG renders in `linux/tests/out` |

@@ -8,6 +8,8 @@ using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
@@ -722,6 +724,32 @@ namespace HwWidget
             check("probe: unknown temperature is a dash", Unit(double.NaN, "C") == "—" && Unit(51, "C") == "51C");
             string tmp = Path.GetFullPath(Path.GetTempPath()), pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
             check("helper: task XML sits beside the helper exe", HelperSetup.TaskXmlPath.StartsWith(pf, StringComparison.OrdinalIgnoreCase) && !HelperSetup.TaskXmlPath.StartsWith(tmp, StringComparison.OrdinalIgnoreCase));
+            string lockDir = Path.Combine(tmp, "hwwidget-selftest-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(lockDir);
+            try
+            {
+                bool second, again, aclOk;
+                using (FileStream first = SensorHelper.TryLock(lockDir))
+                {
+                    using (FileStream other = SensorHelper.TryLock(lockDir)) second = first != null && other == null;
+                    aclOk = first != null;
+                    if (first != null)
+                    {
+                        FileSecurity fsec = File.GetAccessControl(Path.Combine(lockDir, "helper.lock"));
+                        aclOk = fsec.AreAccessRulesProtected;
+                        foreach (FileSystemAccessRule rule in fsec.GetAccessRules(true, true, typeof(SecurityIdentifier)))
+                        {
+                            SecurityIdentifier sid = (SecurityIdentifier)rule.IdentityReference;
+                            if (rule.AccessControlType == AccessControlType.Allow && !sid.IsWellKnown(WellKnownSidType.LocalSystemSid) && !sid.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid)) aclOk = false;
+                        }
+                    }
+                }
+                using (FileStream later = SensorHelper.TryLock(lockDir)) again = later != null;
+                check("helper lock: a second copy cannot start, the next one can", second && again);
+                check("helper lock: only SYSTEM and Administrators may open it", aclOk);
+                check("helper lock: no data folder means no start", SensorHelper.TryLock(Path.Combine(lockDir, "missing")) == null);
+            }
+            finally { try { Directory.Delete(lockDir, true); } catch { } }
 
             Size ps = Painter.PillSize(4, 1.25f);
             check("pill: 192x34 DIP -> 240x43 px at 125%", ps.Width == 240 && ps.Height == 43);
