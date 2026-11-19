@@ -26,6 +26,7 @@ namespace HwWidget
         [StructLayout(LayoutKind.Sequential)] public struct MONITORINFO { public int cbSize; public RECT rcMonitor, rcWork; public uint dwFlags; }
         [StructLayout(LayoutKind.Sequential)] public struct APPBARDATA { public int cbSize; public IntPtr hWnd; public uint uCallbackMessage, uEdge; public RECT rc; public IntPtr lParam; }
         public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+        public delegate void WinEventProc(IntPtr hook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time);
 
         [DllImport("user32.dll")] public static extern IntPtr SetProcessDpiAwarenessContext(IntPtr ctx);
         [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hwnd);
@@ -51,6 +52,10 @@ namespace HwWidget
         [DllImport("user32.dll")] public static extern bool GetMonitorInfoW(IntPtr mon, ref MONITORINFO mi);
         [DllImport("shell32.dll")] public static extern IntPtr SHAppBarMessage(uint msg, ref APPBARDATA data);
         [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hwnd, int attr, out int value, int size);
+        [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
+        [DllImport("user32.dll")] public static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr mod, WinEventProc proc, uint pid, uint thread, uint flags);
+        [DllImport("user32.dll")] public static extern bool UnhookWinEvent(IntPtr hook);
+        public const uint GW_HWNDPREV = 3, EVENT_SYSTEM_FOREGROUND = 3, WINEVENT_OUTOFCONTEXT = 0;
 
         public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
         public const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOACTIVATE = 0x10, SWP_SHOWWINDOW = 0x40;
@@ -237,6 +242,8 @@ namespace HwWidget
         Point pos;
         ContextMenuStrip menu;
         uint myPid = (uint)Process.GetCurrentProcess().Id;
+        Native.WinEventProc onForeground;   // kept in a field so the GC never frees the callback
+        IntPtr fgHook;
 
         public WidgetForm()
         {
@@ -253,6 +260,10 @@ namespace HwWidget
             card.CreateControl();
             IntPtr force = card.Handle;
             worker = new Thread(SampleLoop); worker.IsBackground = true; worker.Name = "HW sampler"; worker.Start();
+            // Clicking the taskbar activates it, and Windows then raises it above every topmost window, the pill
+            // included. React to the activation at once instead of waiting for the next poll.
+            onForeground = delegate { try { if (!stopping) BeginInvoke(new Action(KeepAboveTaskbar)); } catch { } };
+            try { fgHook = Native.SetWinEventHook(Native.EVENT_SYSTEM_FOREGROUND, Native.EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, onForeground, 0, 0, Native.WINEVENT_OUTOFCONTEXT); } catch { }
             tick.Start();
         }
 
@@ -310,7 +321,7 @@ namespace HwWidget
         void OnTick(object sender, EventArgs e)
         {
             ticks++;
-            if (ticks % 4 == 0) Housekeep();
+            if (ticks % 4 == 0) Housekeep(); else KeepAboveTaskbar();
             HoverLogic();
         }
 
@@ -343,6 +354,17 @@ namespace HwWidget
                 if (!Native.IsWindowVisible(Handle) || Placed.X != pos.X || Placed.Y != pos.Y || Placed.Width != sz.Width || Placed.Height != sz.Height) Redraw();
                 else Native.SetWindowPos(Handle, Native.HWND_TOPMOST, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
             }
+        }
+
+        // Puts the pill back above the taskbar when the taskbar has been raised over it (a taskbar click does that).
+        // Only the taskbar counts: menus, flyouts and tooltips that open over the pill must stay on top.
+        void KeepAboveTaskbar()
+        {
+            if (stopping || hiddenForShell || !Shown2) return;
+            Native.RECT me;
+            if (!Native.GetWindowRect(Handle, out me)) return;
+            if (ZOrder.ShellCovers(ZOrder.Above(Handle), me))
+                Native.SetWindowPos(Handle, Native.HWND_TOPMOST, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
         }
 
         bool TaskbarAutoHidden()
@@ -565,6 +587,7 @@ namespace HwWidget
         void Quit()
         {
             stopping = true; wake.Set(); tick.Stop();
+            if (fgHook != IntPtr.Zero) { Native.UnhookWinEvent(fgHook); fgHook = IntPtr.Zero; }
             try { if (worker != null) worker.Join(2000); } catch { }
             card.HideQuiet(); HideQuiet();
             Application.Exit();
@@ -574,6 +597,34 @@ namespace HwWidget
         {
             stopping = true; wake.Set();
             base.OnFormClosing(e);
+        }
+    }
+
+    // Which windows sit above the pill in the z-order, and whether the taskbar is one of those covering it.
+    internal static class ZOrder
+    {
+        public static List<KeyValuePair<string, Native.RECT>> Above(IntPtr hwnd)
+        {
+            List<KeyValuePair<string, Native.RECT>> list = new List<KeyValuePair<string, Native.RECT>>();
+            int seen = 0;
+            for (IntPtr h = Native.GetWindow(hwnd, Native.GW_HWNDPREV); h != IntPtr.Zero && ++seen < 512; h = Native.GetWindow(h, Native.GW_HWNDPREV))
+            {
+                if (!Native.IsWindowVisible(h)) continue;
+                Native.RECT r;
+                if (Native.GetWindowRect(h, out r)) list.Add(new KeyValuePair<string, Native.RECT>(Native.ClassOf(h), r));
+            }
+            return list;
+        }
+
+        public static bool ShellCovers(List<KeyValuePair<string, Native.RECT>> above, Native.RECT me)
+        {
+            foreach (KeyValuePair<string, Native.RECT> w in above)
+            {
+                if (w.Key != "Shell_TrayWnd" && w.Key != "Shell_SecondaryTrayWnd") continue;
+                Native.RECT r = w.Value;
+                if (r.Left < me.Right && r.Right > me.Left && r.Top < me.Bottom && r.Bottom > me.Top) return true;
+            }
+            return false;
         }
     }
 
@@ -750,6 +801,18 @@ namespace HwWidget
                 check("helper lock: no data folder means no start", SensorHelper.TryLock(Path.Combine(lockDir, "missing")) == null);
             }
             finally { try { Directory.Delete(lockDir, true); } catch { } }
+
+            Native.RECT pillR = new Native.RECT(); pillR.Left = 1164; pillR.Top = 1028; pillR.Right = 1404; pillR.Bottom = 1071;
+            Native.RECT barR = new Native.RECT(); barR.Left = 0; barR.Top = 1020; barR.Right = 1920; barR.Bottom = 1080;
+            Native.RECT menuR = new Native.RECT(); menuR.Left = 1100; menuR.Top = 700; menuR.Right = 1400; menuR.Bottom = 1060;
+            Native.RECT otherBar = new Native.RECT(); otherBar.Left = 1920; otherBar.Top = 1020; otherBar.Right = 3840; otherBar.Bottom = 1080;
+            List<KeyValuePair<string, Native.RECT>> above = new List<KeyValuePair<string, Native.RECT>>();
+            above.Add(new KeyValuePair<string, Native.RECT>("#32768", menuR));
+            check("z-order: a menu over the pill stays on top", !ZOrder.ShellCovers(above, pillR));
+            above.Add(new KeyValuePair<string, Native.RECT>("Shell_SecondaryTrayWnd", otherBar));
+            check("z-order: another monitor's taskbar is ignored", !ZOrder.ShellCovers(above, pillR));
+            above.Add(new KeyValuePair<string, Native.RECT>("Shell_TrayWnd", barR));
+            check("z-order: a taskbar raised over the pill is detected", ZOrder.ShellCovers(above, pillR));
 
             Size ps = Painter.PillSize(4, 1.25f);
             check("pill: 192x34 DIP -> 240x43 px at 125%", ps.Width == 240 && ps.Height == 43);
