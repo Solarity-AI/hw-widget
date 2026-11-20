@@ -198,6 +198,81 @@ check('a11y: pill reads as text', M.accessibleText?.(M.buildCells({...M.emptySna
     smp2.destroy();
 }
 
+// TC-120: k10temp on Ryzen 1000/2000 X and Threadripper lists Tctl (with a fan-control offset) before Tdie.
+check('TC-120 temp: k10temp Tdie beats Tctl',
+    pick([{name: 'k10temp', temps: [{label: 'Tctl', c: 82}, {label: 'Tdie', c: 55}]}], [])?.source === 'k10temp Tdie');
+
+// TC-127: bridges, bonds and container interfaces repeat bytes a physical NIC already counted.
+check('TC-127 net: bridge, bond and podman names skipped without /sys',
+    (n => n.rx === 100 && Object.keys(n.ifaces).join() === 'enp3s0')(S.parseNetDev(
+        '  enp3s0: 100 1 0 0 0 0 0 0 40\npodman0: 100 1 0 0 0 0 0 0 40\n    br0: 100 1 0 0 0 0 0 0 40\n  bond0: 100 1 0 0 0 0 0 0 40\n')));
+{
+    const root = fakeRoot('intel');
+    write(root, 'sys/class/net/enp3s0/device/vendor', '0x8086\n');
+    write(root, 'sys/class/net/mybridge/bridge/hello_time', '200\n');
+    write(root, 'proc/net/dev', '  enp3s0: 1000 1 0 0 0 0 0 0 500\nmybridge: 1000 1 0 0 0 0 0 0 500\n');
+    const smp = new S.Sampler({root, nvidia: false});
+    smp.sample();
+    write(root, 'proc/net/dev', '  enp3s0: 3000 1 0 0 0 0 0 0 900\nmybridge: 3000 1 0 0 0 0 0 0 900\n');
+    smp._prevAt = Date.now() - 2000;
+    const s = smp.sample();
+    smp.destroy();
+    rmrf(root);
+    check('TC-127 net: only NICs with a device link count', near(s.netDownBps, 1000, 60), s.netDownBps);
+}
+
+// TC-129 and TC-131: nvidia-smi that exits, and one that fails.
+{
+    const wait = (smp, until) => {
+        const ctx = GLib.MainContext.default(), end = GLib.get_monotonic_time() + 3_000_000;
+        while (!until() && GLib.get_monotonic_time() < end) ctx.iteration(false) || GLib.usleep(10000);
+    };
+    const root = fakeRoot('intel');
+    const calls = `${root}/smi-calls`, smi = `${root}/nvidia-smi`;
+    const ncalls = () => (S.readText(calls) || '').split('\n').filter(Boolean).length;
+    write(root, 'nvidia-smi', `#!/bin/sh\necho "$*" >> '${calls}'\necho '0, 42, 61, 2048, NVIDIA GeForce RTX 4070'\n`);
+    GLib.spawn_command_line_sync(`chmod +x '${smi}'`);
+    let t = 1_000_000;
+    const smp = new S.Sampler({root, smi, clock: () => t});
+    wait(smp, () => smp._nvidia.size && !smp._nvProc);
+    let s = smp.sample();
+    check('TC-129 nvidia: first reading shown', s.gpuPercent === 42, `${s.gpuPercent}`);
+    t += 12000; smp.sample();
+    wait(smp, () => smp._nvidia.get(0)?.at === t);
+    s = smp.sample();
+    check('TC-129 nvidia: nvidia-smi restarted after it exits', ncalls() === 2 && s.gpuPercent === 42, `${ncalls()} calls, gpu ${s.gpuPercent}`);
+    smp.destroy();
+    rmrf(root);
+
+    const root2 = fakeRoot('intel');
+    const dev = 'sys/bus/pci/devices/0000:01:00.0';
+    write(root2, `${dev}/vendor`, '0x10de\n');
+    write(root2, `${dev}/class`, '0x030000\n');
+    write(root2, `${dev}/power/control`, 'auto\n');
+    write(root2, `${dev}/power/runtime_status`, 'active\n');
+    const calls2 = `${root2}/smi-calls`, smi2 = `${root2}/nvidia-smi`;
+    write(root2, 'nvidia-smi', `#!/bin/sh\necho "$*" >> '${calls2}'\necho 'Failed to initialize NVML: Driver/library version mismatch'\nexit 18\n`);
+    GLib.spawn_command_line_sync(`chmod +x '${smi2}'`);
+    const smp2 = new S.Sampler({root: root2, smi: smi2, clock: () => t});
+    for (let i = 0; i < 10; i++) {
+        smp2.sample();
+        wait(smp2, () => !smp2._nvBusy);
+        t += 2000;
+    }
+    const n2 = (S.readText(calls2) || '').split('\n').filter(Boolean).length;
+    check('TC-131 nvidia: a failing query runs at most once per 30 s', n2 === 1, `${n2} calls in 20 s`);
+    smp2.destroy();
+    rmrf(root2);
+}
+
+// TC-135: the colour is judged on the number shown.
+{
+    const c = M.buildCells({...M.emptySnapshot(), cpuTempC: 79.6, cpuPercent: 74.6, ramPercent: 89.6});
+    check('TC-135 level: 74.6 % CPU shows 75% in amber', c[1].value === '75%' && c[1].level === 1, `${c[1].value} ${c[1].level}`);
+    check('TC-135 level: 89.6 % RAM shows 90% in red', c[2].value === '90%' && c[2].level === 2, `${c[2].value} ${c[2].level}`);
+    check('TC-135 level: 79.6 C shows 80° in amber', M.level(79.6, M.THRESHOLDS.temp) === 1 && M.fmt.temp(79.6) === '80°');
+}
+
 // ---------------------------------------------------------------- cells
 const hot = {...M.emptySnapshot(), cpuTempC: 93, cpuPercent: 96, ramPercent: 91, gpuPercent: 97, gpus: [{name: 'GPU', percent: 97, tempC: 86, memUsedGB: 7}], gpuTempC: 86};
 let cells = M.buildCells(hot);

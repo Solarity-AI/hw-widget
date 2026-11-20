@@ -140,13 +140,15 @@ final class Sampler {
 
     private func diskTimes() -> [String: UInt64] {
         var out: [String: UInt64] = [:]
-        var i = 0
+        // Keyed by registry entry ID, which stays with its drive: a loop index moves to another drive when
+        // one is ejected or mounted, and subtracting 2 drives' counters reads as 100 % busy.
         forEachService("IOBlockStorageDriver") { e in
             guard let st = property(e, "Statistics") as? [String: Any] else { return }
+            var id: UInt64 = 0
+            guard IORegistryEntryGetRegistryEntryID(e, &id) == KERN_SUCCESS else { return }
             let r = (st["Total Time (Read)"] as? NSNumber)?.uint64Value ?? 0
             let w = (st["Total Time (Write)"] as? NSNumber)?.uint64Value ?? 0
-            out["disk\(i)"] = r + w
-            i += 1
+            out["\(id)"] = r + w
         }
         return out
     }

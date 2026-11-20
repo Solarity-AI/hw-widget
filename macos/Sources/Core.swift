@@ -80,8 +80,10 @@ enum Thresholds {
     static let temp = (80.0, 90.0), cpu = (75.0, 90.0), ram = (80.0, 90.0), gpu = (85.0, 95.0), disk = (80.0, 95.0)
 }
 
+/// Judged on the whole number shown, so 74.6 % reads "75%" and is amber, never "75%" in white.
 func level(_ v: Double, _ th: (Double, Double)) -> Int {
     guard v.isFinite else { return 0 }
+    let v = v.rounded()
     return v >= th.1 ? 2 : v >= th.0 ? 1 : 0
 }
 
@@ -221,7 +223,7 @@ func cardRows(_ s: Snapshot, fahrenheit: Bool = false, palette p: Palette = .dar
 /// CPU busy percent between two (user, system, idle, nice) tick samples.
 func cpuPercent(_ a: [UInt64]?, _ b: [UInt64]) -> Double {
     guard let a, a.count == 4, b.count == 4 else { return .nan }
-    let d = zip(a, b).map { $1 >= $0 ? Double($1 - $0) : Double($1) }   // a reset counter counts from 0
+    let d = zip(a, b).map { Double(counterDelta($0, $1)) }   // the tick counters are 32-bit and wrap
     let total = d.reduce(0, +)
     return total > 0 ? max(0, min(100, (total - d[2]) / total * 100)) : .nan
 }
@@ -243,9 +245,11 @@ func diskBusy(_ prev: [String: UInt64]?, _ cur: [String: UInt64], ms: Double) ->
     return best
 }
 
-/// Byte-counter delta that survives the 32-bit wrap of if_data counters.
+/// Delta of a 32-bit counter (if_data bytes, CPU ticks). A drop of more than half the range is a wrap; a
+/// smaller drop is a counter that restarted (adapter re-plugged, driver reset), which counts from 0.
 func counterDelta(_ prev: UInt64, _ cur: UInt64, wrap: UInt64 = 1 << 32) -> UInt64 {
-    cur >= prev ? cur - prev : cur + wrap - prev
+    if cur >= prev { return cur - prev }
+    return prev - cur > wrap / 2 ? cur + wrap - prev : cur
 }
 
 /// Bytes per interface name, as read from getifaddrs.
@@ -299,6 +303,33 @@ func fourCC(_ s: String) -> UInt32 { s.utf8.prefix(4).reduce(0) { $0 << 8 | UInt
 /// Celsius by default everywhere; Fahrenheit only when chosen in the menu.
 let defaultFahrenheit = false
 
+// MARK: - Settings (stored as JSON by App.swift)
+
+struct Settings: Codable {
+    var interval: Double = 2
+    var fahrenheit = defaultFahrenheit
+    var fourth = Fourth.auto.rawValue
+
+    /// Out-of-range values fall back to their defaults.
+    func validated() -> Settings {
+        var s = self
+        if ![1, 2, 5].contains(s.interval) { s.interval = 2 }
+        if Fourth(rawValue: s.fourth) == nil { s.fourth = Fourth.auto.rawValue }
+        return s
+    }
+}
+
+extension Settings {
+    /// A missing key (an older file, a hand edit) keeps its default instead of resetting every setting.
+    init(from decoder: Decoder) throws {
+        self.init()
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        interval = (try? c.decodeIfPresent(Double.self, forKey: .interval)) ?? interval
+        fahrenheit = (try? c.decodeIfPresent(Bool.self, forKey: .fahrenheit)) ?? fahrenheit
+        fourth = (try? c.decodeIfPresent(String.self, forKey: .fourth)) ?? fourth
+    }
+}
+
 // MARK: - Self-test (runs on macOS with --self-test and on Linux through tests/main.swift)
 
 func coreSelfTest() -> (passed: Int, failed: Int) {
@@ -308,6 +339,19 @@ func coreSelfTest() -> (passed: Int, failed: Int) {
     }
     check("fmt: 20 C -> 68 F", Fmt.temp(20, true) == "68\u{00B0}")
     check("fmt: NaN temp is a dash", Fmt.temp(.nan, false) == dash)
+    // TC-135: the colour matches the number shown.
+    check("TC-135 level: 74.6 % CPU shows 75% in amber", Fmt.pct(74.6) == "75%" && level(74.6, Thresholds.cpu) == 1)
+    check("TC-135 level: 89.6 % RAM shows 90% in red", Fmt.pct(89.6) == "90%" && level(89.6, Thresholds.ram) == 2)
+    // TC-137: a counter that restarts is not a 4 GB wrap; a real wrap still counts.
+    check("TC-137 net: restarted counter adds only its new bytes", netDelta(["en0": (5_000_000, 0)], ["en0": (1_000, 0)]).rx == 1_000)
+    check("TC-137 net: 32-bit wrap still counted", counterDelta(4_294_967_000, 200) == 496)
+    // TC-139: a wrapped 32-bit tick counter is not a reset.
+    check("TC-139 cpu: tick wrap gives 5 %", abs(cpuPercent([100_000, 50_000, 4_294_964_266, 0], [100_080, 50_080, 10, 0]) - 5) < 0.01)
+    // TC-141: a settings file without a key keeps the other settings.
+    let partial = try? JSONDecoder().decode(Settings.self, from: Data(#"{"interval":5,"fahrenheit":true}"#.utf8))
+    check("TC-141 settings: missing key keeps the others", partial?.interval == 5 && partial?.fahrenheit == true && partial?.fourth == "auto")
+    let bad = try? JSONDecoder().decode(Settings.self, from: Data(#"{"interval":7,"fourth":"cpu"}"#.utf8))
+    check("TC-141 settings: invalid values fall back", bad?.validated().interval == 2 && bad?.validated().fourth == "auto")
     check("fmt: pct clamps", Fmt.pct(104) == "100%" && Fmt.pct(-3) == "0%")
     check("fmt: rate", Fmt.rate(1536) == "1.5 KB/s" && Fmt.rate(48e6) == "46 MB/s" && Fmt.rate(12) == "12 B/s")
     check("fmt: gb", Fmt.gb(7.94) == "7.9 GB" && Fmt.gb(31.8) == "32 GB")

@@ -142,19 +142,13 @@ func renderImage(size: NSSize, scale: CGFloat, background: RGB? = nil, _ draw: (
 
 // MARK: - Settings
 
-struct Settings: Codable {
-    var interval: Double = 2
-    var fahrenheit = defaultFahrenheit
-    var fourth = Fourth.auto.rawValue
-
+extension Settings {
     static let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/HW Widget")
     static let file = dir.appendingPathComponent("settings.json")
 
     static func load() -> Settings {
-        guard let d = try? Data(contentsOf: file), var s = try? JSONDecoder().decode(Settings.self, from: d) else { return Settings() }
-        if ![1, 2, 5].contains(s.interval) { s.interval = 2 }
-        if Fourth(rawValue: s.fourth) == nil { s.fourth = Fourth.auto.rawValue }
-        return s
+        guard let d = try? Data(contentsOf: file), let s = try? JSONDecoder().decode(Settings.self, from: d) else { return Settings() }
+        return s.validated()
     }
 
     func save() {

@@ -60,8 +60,10 @@ export function tempColor(c) {
     return RAMP_C[RAMP_C.length - 1];
 }
 
+// Judged on the whole number the pill shows, so 74.6 % reads "75%" and is amber, never "75%" in white.
 export function level(v, [warn, crit]) {
     if (!Number.isFinite(v)) return 0;
+    v = Math.round(v);
     return v >= crit ? 2 : v >= warn ? 1 : 0;
 }
 

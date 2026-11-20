@@ -12,11 +12,20 @@ major=$(gnome-shell --version 2>/dev/null | sed -n 's/^GNOME Shell \([0-9][0-9]*
 if [ -n "$major" ] && [ "$major" -lt 42 ]; then
   echo "${red}❌ GNOME Shell $major is too old: HW Widget needs GNOME 42 or later.${off}"; exit 1
 fi
+# GNOME Shell refuses an extension whose metadata doesn't list its version, so say so instead of
+# reporting a success that never shows the pill.
+newest=$(sed -n 's/.*"shell-version" *: *\[\([^]]*\)\].*/\1/p' "$src/metadata.json" | tr -dc '0-9,' | tr ',' '\n' | sort -n | tail -n 1)
+if [ -n "$major" ] && [ -n "$newest" ] && [ "$major" -gt "$newest" ]; then
+  echo "${red}❌ GNOME Shell $major is newer than this HW Widget supports (GNOME 42-$newest). Update HW Widget, or open an issue to request GNOME $major support.${off}"; exit 1
+fi
 
 # GNOME Shell keeps running the code it loaded until the session restarts, so an update to a running
-# extension only takes effect after a log-out.
+# extension only takes effect after a log-out. That holds in every state GNOME reports once it has seen
+# the extension (ACTIVE, INACTIVE, ENABLED, DISABLED, ERROR, ...): only a never-loaded one (no state, or
+# INITIALIZED on GNOME 45+) runs the new copy right away.
 running=no
-if gnome-extensions info "$uuid" 2>/dev/null | grep -qiE 'state: *(enabled|active)'; then running=yes; fi
+state=$(gnome-extensions info "$uuid" 2>/dev/null | sed -n 's/^ *[Ss]tate: *//p' | tr '[:lower:]' '[:upper:]')
+case "$state" in ''|INITIALIZED|UNINSTALLED) ;; *) running=yes ;; esac
 
 rm -rf "$dest"
 mkdir -p "$dest"
