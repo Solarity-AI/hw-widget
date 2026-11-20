@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Solarity-AI/hw-widget/actions/workflows/ci.yml/badge.svg)](https://github.com/Solarity-AI/hw-widget/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/Solarity-AI/hw-widget)](https://github.com/Solarity-AI/hw-widget/releases/latest)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: proprietary](https://img.shields.io/badge/license-proprietary-red.svg)](LICENSE)
 ![Windows | GNOME | macOS](https://img.shields.io/badge/platforms-Windows%20%7C%20GNOME%20%7C%20macOS-555)
 
 A small, colorful hardware pill for the Windows taskbar, the GNOME top bar and the macOS menu bar.
@@ -140,4 +140,4 @@ Report security problems privately through [GitHub security advisories](https://
 
 ## License
 
-[MIT](LICENSE)
+© Solarity AI LLC. All rights reserved. See [LICENSE](LICENSE).
