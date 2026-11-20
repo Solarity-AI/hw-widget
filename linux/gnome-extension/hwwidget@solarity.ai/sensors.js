@@ -96,14 +96,17 @@ export function diskBusy(prev, cur, elapsedMs) {
     return best;
 }
 
-const NET_SKIP = /^(lo|docker\d*|veth|br-|virbr|vnet|tap|tun|wg|zt|tailscale|cni|flannel|kube|lxc|lxd)/;
+// Virtual interfaces whose bytes a physical NIC already counted (bridges, bonds, VPNs, containers). Used
+// only when /sys/class/net can't tell physical NICs apart (see Sampler.sample).
+const NET_SKIP = /^(lo|docker\d*|veth|br-|br\d|bridge|bond|team|virbr|vnet|vmnet|tap|tun|wg|zt|tailscale|cni|flannel|kube|lxc|lxd|incusbr|podman|cali)/;
 
-export function parseNetDev(text) {
+// keep(name): which interfaces count; default: every name NET_SKIP doesn't match.
+export function parseNetDev(text, keep = null) {
     let rx = 0, tx = 0, n = 0;
     const ifaces = {};
     for (const l of (text || '').split('\n')) {
         const m = /^\s*([^:\s]+):\s*(.*)$/.exec(l);
-        if (!m || NET_SKIP.test(m[1])) continue;
+        if (!m || (keep ? !keep(m[1]) : NET_SKIP.test(m[1]))) continue;
         const f = m[2].trim().split(/\s+/).map(Number);
         ifaces[m[1]] = {rx: f[0] || 0, tx: f[8] || 0};
         rx += f[0] || 0;
@@ -127,9 +130,10 @@ export function netDelta(prev, cur) {
     return d;
 }
 
-// hwmon chips in preference order, with the sensor label to prefer inside each chip.
+// hwmon chips in preference order, with the sensor labels to prefer inside each chip, best first. On AMD,
+// Tdie is the die temperature; Tctl adds a 10-27 C fan-control offset on some Ryzen and Threadripper models.
 const CPU_CHIPS = [
-    ['coretemp', /^Package id/i], ['k10temp', /^(Tctl|Tdie)$/i], ['zenpower', /^(Tdie|Tctl)$/i],
+    ['coretemp', /^Package id/i], ['k10temp', [/^Tdie$/i, /^Tctl$/i]], ['zenpower', [/^Tdie$/i, /^Tctl$/i]],
     ['cpu_thermal', null], ['cpu-thermal', null], ['soc_thermal', null], ['nct6775', /^(CPUTIN|PECI|SMBUSMASTER)/i],
     ['it87', null], ['acpitz', null],
 ];
@@ -141,7 +145,8 @@ export function pickCpuTemp(chips, zones) {
         for (const chip of chips.filter(x => x.name === name)) {
             const temps = chip.temps.filter(t => ok(t.c));
             if (!temps.length) continue;
-            const hit = pref ? temps.find(t => pref.test(t.label || '')) : null;
+            const prefs = pref ? [].concat(pref) : [];
+            const hit = prefs.map(re => temps.find(t => re.test(t.label || ''))).find(Boolean);
             const t = hit || temps.reduce((a, b) => (b.c > a.c ? b : a));
             return {c: t.c, source: `${name}${t.label ? ` ${t.label}` : ''}`};
         }
@@ -207,32 +212,50 @@ export class Sampler {
             this._nvAwakeSince = 0;
             return;
         }
+        this._nvFails = 0;
+        this._spawnNvidiaStream();
+    }
+
+    // 1 long-lived nvidia-smi that prints a line every 2 s. When it exits (GPU reset, driver reload, NVML
+    // error), sample() starts it again after 10 s, then every 60 s while it keeps exiting without a reading.
+    _spawnNvidiaStream() {
+        this._nvRestartAt = 0;
         try {
             this._nvProc = Gio.Subprocess.new(
-                [smi, '--query-gpu=index,utilization.gpu,temperature.gpu,memory.used,name', '--format=csv,noheader,nounits', '-lms', '2000'],
+                [this._smi, '--query-gpu=index,utilization.gpu,temperature.gpu,memory.used,name', '--format=csv,noheader,nounits', '-lms', '2000'],
                 Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE);
-            this._nvStream = new Gio.DataInputStream({base_stream: this._nvProc.get_stdout_pipe(), close_base_stream: true});
-            this._readNvidia();
+            const stream = new Gio.DataInputStream({base_stream: this._nvProc.get_stdout_pipe(), close_base_stream: true});
+            this._readNvidia(stream, this._nvProc);
         } catch {
-            this._nvProc = null;
+            this._nvidiaEnded(null);
         }
     }
 
-    _readNvidia() {
-        this._nvStream.read_line_async(GLib.PRIORITY_LOW, this._nvCancel, (stream, res) => {
+    _nvidiaEnded(proc) {
+        if (this._nvCancel?.is_cancelled() || proc !== this._nvProc) return;
+        this._nvProc = null;
+        this._nvRestartAt = this._clock() + (this._nvFails++ ? 60000 : 10000);
+    }
+
+    _readNvidia(stream, proc) {
+        stream.read_line_async(GLib.PRIORITY_LOW, this._nvCancel, (st, res) => {
             let line;
             try {
-                [line] = stream.read_line_finish_utf8(res);
+                [line] = st.read_line_finish_utf8(res);
             } catch {
+                line = null;
+            }
+            if (line === null) {   // nvidia-smi exited
+                this._nvidiaEnded(proc);
                 return;
             }
-            if (line === null) return;   // nvidia-smi exited
             const g = parseNvidiaLine(line);
             if (g) {
                 g.at = this._clock();
                 this._nvidia.set(g.index, g);
+                this._nvFails = 0;
             }
-            this._readNvidia();
+            this._readNvidia(st, proc);
         });
     }
 
@@ -250,8 +273,10 @@ export class Sampler {
         // Between queries an awake GPU keeps its last reading (0 % right after sleep), so the pill does not
         // flip between GPU and DISK. The very first reading is taken at once to learn the GPU's name.
         for (const g of this._nvidia.values()) Object.assign(g, {asleep: false, at: now});
-        const first = !this._nvidia.size;
+        // Only 1 query skips the waits, even when it brings no reading (a failing nvidia-smi).
+        const first = !this._nvQueried && !this._nvidia.size;
         if (this._nvBusy || (!first && (now < this._nvNext || now - this._nvAwakeSince < 25000))) return;
+        this._nvQueried = true;
         this._nvBusy = true;
         this._nvNext = now + 30000;
         try {
@@ -338,7 +363,12 @@ export class Sampler {
         s.diskPercent = diskBusy(this._prevDisk, disk, elapsed);
         this._prevDisk = disk;
 
-        const net = parseNetDev(readText(this._p('proc/net/dev')));
+        // Count only physical NICs (those with a device link) where /sys tells them apart: bridge, bond and
+        // VPN interfaces repeat bytes a NIC already counted.
+        const netDir = this._p('sys/class/net');
+        const phys = listDir(netDir).filter(n => GLib.file_test(`${netDir}/${n}/device`, GLib.FileTest.EXISTS));
+        const keep = phys.length ? n => phys.includes(n) : null;
+        const net = parseNetDev(readText(this._p('proc/net/dev')), keep);
         if (net && this._prevNet && elapsed > 0) {
             const d = netDelta(this._prevNet, net);
             s.netDownBps = d.rx * 1000 / elapsed;
@@ -347,6 +377,7 @@ export class Sampler {
         this._prevNet = net;
         this._prevAt = now;
 
+        if (this._nvRestartAt && now >= this._nvRestartAt) this._spawnNvidiaStream();
         this._pollNvidia(now);
         const maxAge = this._nvPm?.length ? 40000 : 10000;   // sleep-aware readings come at most every 30 s
         const gpus = [...this._nvidia.values()].filter(g => now - g.at < maxAge)
@@ -366,6 +397,7 @@ export class Sampler {
     }
 
     destroy() {
+        this._nvRestartAt = 0;
         try {
             this._nvCancel?.cancel();
             this._nvProc?.force_exit();

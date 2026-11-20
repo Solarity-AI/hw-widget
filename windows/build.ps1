@@ -5,7 +5,7 @@ $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path $csc)) { $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe' }
 if (-not (Test-Path $csc)) { Write-Host '❌ .NET Framework 4 compiler not found' -ForegroundColor Red; exit 1 }
 New-Item -ItemType Directory -Force (Split-Path $Out) | Out-Null
-$src = Get-ChildItem (Join-Path $PSScriptRoot 'src') -Filter *.cs | ForEach-Object { $_.FullName }
+$src = Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src') -Filter *.cs | ForEach-Object { $_.FullName }
 $args = @('/nologo', '/target:winexe', '/optimize+', '/platform:anycpu', "/out:$Out",
           "/win32manifest:$(Join-Path $PSScriptRoot 'app.manifest')",
           '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll', '/r:System.Management.dll') + $src

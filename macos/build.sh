@@ -33,5 +33,7 @@ cat > "$out/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --sign - "$out" >/dev/null 2>&1
+if ! sign_err="$(codesign --force --sign - "$out" 2>&1)"; then
+  echo "${red}❌ Signing failed: ${sign_err}${off}"; exit 1
+fi
 codesign --verify "$out" && echo "${green}✅ Built $out${off}"

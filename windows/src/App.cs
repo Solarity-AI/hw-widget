@@ -48,6 +48,7 @@ namespace HwWidget
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr hwnd, StringBuilder sb, int max);
         [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr hwnd);
         [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
         [DllImport("user32.dll")] public static extern bool GetMonitorInfoW(IntPtr mon, ref MONITORINFO mi);
         [DllImport("shell32.dll")] public static extern IntPtr SHAppBarMessage(uint msg, ref APPBARDATA data);
@@ -385,7 +386,7 @@ namespace HwWidget
             if (!Native.GetWindowRect(fg, out r)) return false;
             Native.MONITORINFO fm = Native.Monitor(fg);
             if (fm.rcMonitor.Left != mon.Left || fm.rcMonitor.Top != mon.Top) return false;
-            return r.Left <= mon.Left && r.Top <= mon.Top && r.Right >= mon.Right && r.Bottom >= mon.Bottom;
+            return ZOrder.IsFullscreen(r, mon, Native.IsZoomed(fg));
         }
 
         Point Target(IntPtr tray, Size sz)
@@ -603,6 +604,14 @@ namespace HwWidget
     // Which windows sit above the pill in the z-order, and whether the taskbar is one of those covering it.
     internal static class ZOrder
     {
+        // A window in front counts as full screen when it covers the whole monitor and isn't merely maximized:
+        // a maximized window overhangs the monitor by its border on every side once the taskbar auto-hides.
+        public static bool IsFullscreen(Native.RECT win, Native.RECT mon, bool zoomed)
+        {
+            if (zoomed) return false;
+            return win.Left <= mon.Left && win.Top <= mon.Top && win.Right >= mon.Right && win.Bottom >= mon.Bottom;
+        }
+
         public static List<KeyValuePair<string, Native.RECT>> Above(IntPtr hwnd)
         {
             List<KeyValuePair<string, Native.RECT>> list = new List<KeyValuePair<string, Native.RECT>>();
@@ -751,6 +760,15 @@ namespace HwWidget
             check("fmt: 1536 B/s", Fmt.Rate(1536) == "1.5 KB/s");
             check("fmt: 48 MB/s", Fmt.Rate(48e6) == "46 MB/s");
             check("fmt: levels", Fmt.Level(79, 80, 90) == 0 && Fmt.Level(80, 80, 90) == 1 && Fmt.Level(95, 80, 90) == 2);
+            // TC-135: the colour matches the number shown, and .5 rounds up as on GNOME and macOS.
+            check("TC-135 fmt: 74.6 % shows 75% in amber", Fmt.Pct(74.6) == "75%" && Fmt.Level(74.6, 75, 90) == 1);
+            check("TC-135 fmt: 89.6 % RAM shows 90% in red", Fmt.Pct(89.6) == "90%" && Fmt.Level(89.6, 80, 90) == 2);
+            check("TC-135 fmt: 68.5 C shows 69, 50.5 % shows 51%", Fmt.Temp(68.5, false) == "69°" && Fmt.Pct(50.5) == "51%");
+            // TC-122: a maximized window over an auto-hidden taskbar is not full screen; a real full-screen one is.
+            Native.RECT monR = new Native.RECT(); monR.Right = 1536; monR.Bottom = 960;
+            Native.RECT maxR = new Native.RECT(); maxR.Left = -7; maxR.Top = -7; maxR.Right = 1543; maxR.Bottom = 967;
+            check("TC-122 fullscreen: maximized window with auto-hide taskbar is not full screen", !ZOrder.IsFullscreen(maxR, monR, true));
+            check("TC-122 fullscreen: borderless window covering the monitor is full screen", ZOrder.IsFullscreen(monR, monR, false));
 
             HwSnapshot noGpu = new HwSnapshot(); noGpu.CpuPercent = 10; noGpu.DiskPercent = 5;
             Cell[] c = Painter.Cells(noGpu, false, Fourth.Auto, Palette.For(true));

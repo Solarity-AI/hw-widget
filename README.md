@@ -1,16 +1,27 @@
 # HW Widget
 
+[![CI](https://github.com/Solarity-AI/hw-widget/actions/workflows/ci.yml/badge.svg)](https://github.com/Solarity-AI/hw-widget/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/Solarity-AI/hw-widget)](https://github.com/Solarity-AI/hw-widget/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Windows | GNOME | macOS](https://img.shields.io/badge/platforms-Windows%20%7C%20GNOME%20%7C%20macOS-555)
+
 A small, colorful hardware pill for the Windows taskbar, the GNOME top bar and the macOS menu bar.
 It shows the **temperature** plus the 3 metrics that matter most: **CPU**, **memory** and **GPU** (or disk when there is no GPU).
 Open it for details: GPU temperature and memory, disk activity and network speed.
+
+- **Free and open source** (MIT), built from source on your machine with the compiler your OS already has.
+- **No admin or root rights**, no background service, no downloads at install time.
+- **No network access and no telemetry:** the code makes no network calls.
 
 ![Windows pill](docs/images/windows-pill.png)
 
 ![Windows pill under load](docs/images/windows-pill-hot.png)
 
+![GNOME pill](docs/images/gnome-pill.png)
+
 | Windows card (dark) | Windows card (light) | GNOME card |
 | --- | --- | --- |
-| ![](docs/images/windows-card-dark.png) | ![](docs/images/windows-card-light.png) | ![](docs/images/gnome-card.png) |
+| ![Windows details card, dark theme](docs/images/windows-card-dark.png) | ![Windows details card, light theme](docs/images/windows-card-light.png) | ![GNOME details card](docs/images/gnome-card.png) |
 
 ## What it shows
 
@@ -22,33 +33,28 @@ Open it for details: GPU temperature and memory, disk activity and network speed
 | **GPU** | Busiest graphics adapter; **DISK** (busiest drive's active time) when there is no GPU | 85 / 95 % (disk 80 / 95 %) |
 
 Temperatures are in **°C** by default; switch to °F in the menu.
+The colour is judged on the whole number shown, so `75%` CPU is always amber.
 An unknown value shows a dim dash instead of a guess.
 
 ## Install
 
+Get the code first: [download the latest release](https://github.com/Solarity-AI/hw-widget/releases/latest) and unzip it, or clone the repository.
+
 ### Windows 10 and 11
 
-1. Download or clone this repository.
-
-2. Double-click `Install HW Widget (Windows).cmd`.
+Double-click `Install HW Widget (Windows).cmd`.
 
 It compiles the widget with the C# compiler built into Windows (no SDK, no downloads, no admin rights), runs its self-test, adds it to startup and launches it.
 The pill sits on the taskbar left of the tray. Hover for the details card, click to pin it, right-click for settings.
 
-Remove it with:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File windows\uninstall.ps1
-```
-
-Sensors: Performance counters (CPU, memory, disk), the Windows graphics kernel (GPU load and temperature, as Task Manager shows them), NVIDIA NVML as a fallback, ACPI thermal zones for the CPU temperature, and [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) when it is running.
-It uses under 1 % of 1 core and about 45 MB of memory, and hides itself while a full-screen app is in front.
+Sensors: Windows performance counters for CPU, memory and disk; the `GPU Engine` counters for GPU load, as Task Manager computes it; the graphics kernel (D3DKMT) for GPU names and temperature, with NVIDIA NVML as a fallback; ACPI thermal zones for the CPU temperature; and [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) or OpenHardwareMonitor when one is running.
+It uses under 1 % of 1 core and about 35 MB of memory, and hides itself while a full-screen app (a game, a video) is in front; a maximized window doesn't hide it.
 
 #### No CPU temperature? Enable the helper (1 admin prompt)
 
 Some laptops, for example Intel Core Ultra (Lunar Lake) machines, show a dash for TEMP. Their only ACPI zone is a fixed placeholder, and the real sensors (Intel Dynamic Tuning, `root\wmi:EsifDeviceInformation`) can only be read by an admin.
 
-To fix it, right-click the pill and choose **Enable CPU temperature (admin)**. You can also run this:
+To fix it, right-click the pill and choose **Enable CPU temperature (admin)**. You can also run this from the repository folder:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File windows\install.ps1 -EnableCpuTemp
@@ -72,7 +78,9 @@ sh linux/install.sh
 
 Log out and back in once if the script asks you to.
 On GNOME 42–44 (for example Ubuntu 22.04) the script converts the extension to GNOME's older module format with `linux/legacy/convert.js`; it needs nothing extra.
-Sensors: `/proc` for CPU, memory, disk and network, `hwmon` and thermal zones for temperatures (Intel `coretemp`, AMD `k10temp`, ARM `cpu-thermal`), `nvidia-smi` for NVIDIA GPUs and `amdgpu` sysfs for AMD GPUs.
+On a GNOME newer than 49 the script stops with a clear message, since GNOME Shell refuses an extension that doesn't list its version.
+
+Sensors: `/proc` for CPU, memory, disk and network (physical network adapters only, so bridges, bonds and VPNs aren't counted twice); `hwmon` and thermal zones for temperatures (Intel `coretemp`, AMD `k10temp` with the die temperature `Tdie` preferred over the fan-control `Tctl`, ARM `cpu-thermal`); `nvidia-smi` for NVIDIA GPUs, restarted if it exits; and `amdgpu` sysfs for AMD GPUs.
 On laptops whose NVIDIA GPU can sleep, the widget never wakes it: a sleeping GPU shows 0 % ("asleep" in the card), and an awake one is read at most every 30 s, only after it has been awake on its own for 25 s.
 Settings are saved in `~/.config/hwwidget/settings.json`.
 
@@ -83,17 +91,38 @@ Settings are saved in `~/.config/hwwidget/settings.json`.
 ```
 
 It needs the Command Line Tools (`xcode-select --install`), builds `HW Widget.app` into `~/Applications`, starts it and adds it to login items.
-Sensors: Mach host statistics (CPU, memory), IOKit (GPU load and memory, disk activity), the Apple Silicon thermal sensors or the Intel SMC for temperatures, and macOS's thermal state as a fallback.
+Sensors: Mach host statistics (CPU, memory), IOKit (GPU load and memory, disk activity per drive), the Apple Silicon thermal sensors or the Intel SMC for temperatures, and macOS's thermal state as a fallback.
+Settings are saved in `~/Library/Application Support/HW Widget/settings.json`.
+
+## Uninstall
+
+Each command removes the widget, its startup entry and its settings. Run it from the repository folder.
+
+| Platform | Command |
+| --- | --- |
+| Windows | `powershell -ExecutionPolicy Bypass -File windows\uninstall.ps1` (1 admin prompt only if the CPU temperature helper is installed) |
+| Linux | `sh linux/uninstall.sh` |
+| macOS | `./macos/uninstall.sh` |
+
+## Troubleshooting
+
+| Problem | What to do |
+| --- | --- |
+| TEMP shows a dash on Windows | Enable the CPU temperature helper (above), or run LibreHardwareMonitor. |
+| TEMP shows `GPU°` | The CPU has no readable sensor, so the GPU temperature is shown instead. |
+| The pill doesn't appear on GNOME | Log out and back in once; then check `gnome-extensions info hwwidget@solarity.ai`. |
+| The Windows pill disappeared | A full-screen app is in front; it comes back when you leave full screen. |
+| Something else | [Open an issue](https://github.com/Solarity-AI/hw-widget/issues/new) with your OS, hardware and what the pill shows. |
 
 ## Develop and test
 
 | Platform | Command | What it checks |
 | --- | --- | --- |
-| Windows | `windows\build.ps1`, then `windows\bin\HWWidget.exe --selftest out.txt` | 29 sensor, helper, layout, formatting and accessibility checks |
-| Windows | `windows\tests\scripts-test.ps1` | 4 install and uninstall script checks (self-test gate, honest uninstall message) |
+| Windows | `windows\build.ps1`, then `windows\bin\HWWidget.exe --selftest out.txt` | 37 sensor, helper, layout, formatting, full-screen and accessibility checks |
+| Windows | `windows\tests\scripts-test.ps1` | 5 install, uninstall and build script checks (self-test gate, honest uninstall message, folder names with brackets) |
 | Windows | `HWWidget.exe --render <dir>` / `--probe <secs> <csv>` | PNG renders of every state / live sensor log |
-| Linux | `sh linux/tests/run-docker.sh` | 62 parser, sensor-tree and model checks, 15 GNOME 42 module checks and 10 install-script checks, in Docker on Debian trixie (GNOME 45+) and Ubuntu 22.04 (GNOME 42), plus PNG renders in `linux/tests/out` |
-| macOS | `sh macos/tests/run-docker.sh` | 37 model and parser checks of the shared core, on Linux in Docker |
+| Linux | `sh linux/tests/run-docker.sh` | 71 parser, sensor-tree, nvidia-smi and model checks, 15 GNOME 42 module checks and 16 install and uninstall checks, in Docker on Debian trixie (GNOME 45+) and Ubuntu 22.04 (GNOME 42), plus PNG renders in `linux/tests/out` |
+| macOS | `sh macos/tests/run-docker.sh` | 44 model, parser and settings checks of the shared core, on Linux in Docker |
 | macOS | `HWWidget --self-test`, `--probe 10`, `--render <dir>` | The same checks, a live sensor log and PNG renders, on a Mac |
 
 CI runs all 3 platforms on pull requests and on manual runs, each only when its folder changes.
@@ -106,8 +135,9 @@ CI runs all 3 platforms on pull requests and on manual runs, each only when its 
 | Linux / GNOME | Tested in Docker; the GNOME 42 build loads, draws and survives 5 disable/enable cycles in a headless GNOME Shell 42.9 on a real laptop (Intel Core, NVIDIA RTX 4000 Ada); not yet seen in a live desktop session |
 | macOS | Builds, self-test, live probe and renders pass on GitHub's macOS runner (a VM without temperature sensors); not yet run on a physical Mac |
 
-Reports from real GNOME and Mac machines are welcome as issues.
+Reports from real GNOME and Mac machines are welcome as [issues](https://github.com/Solarity-AI/hw-widget/issues).
+Report security problems privately through [GitHub security advisories](https://github.com/Solarity-AI/hw-widget/security/advisories/new).
 
 ## License
 
-MIT
+[MIT](LICENSE)

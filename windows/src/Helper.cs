@@ -1,4 +1,4 @@
-// HW Widget for Windows - opt-in CPU temperature helper.
+﻿// HW Widget for Windows - opt-in CPU temperature helper.
 // Some laptops (for example Intel Lunar Lake) expose no CPU temperature to normal users: the only ACPI zone is a
 // placeholder and the real sensors (Intel Dynamic Tuning / ESIF in root\wmi) are admin-only. After 1 UAC prompt
 // this installs a tiny copy of the widget as a SYSTEM scheduled task that reads those sensors and writes the value
@@ -213,6 +213,39 @@ namespace HwWidget
                 try { p.Kill(); p.WaitForExit(3000); } catch { }
         }
 
+        // Recreates the data folder with exactly these rules, owned by Administrators. CreateDirectory keeps the
+        // rules and owner of a folder that already exists, so they are set again afterwards, and anything found
+        // inside is removed without following links.
+        static bool MakeDataDir(DirectorySecurity sec)
+        {
+            string dir = HelperFile.Dir;
+            try
+            {
+                RemoveNoFollow(dir);
+                Directory.CreateDirectory(dir, sec);
+                DirectoryInfo di = new DirectoryInfo(dir);
+                if ((di.Attributes & FileAttributes.ReparsePoint) != 0) return false;
+                sec.SetOwner(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null));
+                di.SetAccessControl(sec);
+                foreach (FileSystemInfo e in di.GetFileSystemInfos()) RemoveNoFollow(e.FullName);
+                return di.GetFileSystemInfos().Length == 0;
+            }
+            catch (Exception) { return false; }
+        }
+
+        static void RemoveNoFollow(string path)
+        {
+            if (!File.Exists(path) && !Directory.Exists(path)) return;
+            FileAttributes a = File.GetAttributes(path);
+            if ((a & FileAttributes.Directory) == 0) { File.SetAttributes(path, FileAttributes.Normal); File.Delete(path); }
+            else if ((a & FileAttributes.ReparsePoint) != 0) Directory.Delete(path, false);   // the link only
+            else
+            {
+                foreach (FileSystemInfo e in new DirectoryInfo(path).GetFileSystemInfos()) RemoveNoFollow(e.FullName);
+                Directory.Delete(path, false);
+            }
+        }
+
         public static int Install()
         {
             if (!IsElevated()) return 5;
@@ -228,8 +261,7 @@ namespace HwWidget
             sec.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), FileSystemRights.FullControl, inh, PropagationFlags.None, AccessControlType.Allow));
             sec.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null), FileSystemRights.ReadAndExecute, inh, PropagationFlags.None, AccessControlType.Allow));
             sec.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null), FileSystemRights.ReadAndExecute, inh, PropagationFlags.None, AccessControlType.Allow));
-            if (Directory.Exists(HelperFile.Dir)) Directory.Delete(HelperFile.Dir, true);
-            Directory.CreateDirectory(HelperFile.Dir, sec);
+            if (!MakeDataDir(sec)) return 6;
 
             string xml = TaskXmlPath;
             File.WriteAllText(xml, TaskXml(BinPath), Encoding.Unicode);

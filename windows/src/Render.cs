@@ -28,7 +28,7 @@ namespace HwWidget
         {
             if (double.IsNaN(c)) return Dash;
             double v = f ? c * 9 / 5 + 32 : c;
-            return Math.Round(v).ToString("0", Inv) + "°";
+            return R(v).ToString("0", Inv) + "°";
         }
         public static string TempLong(double c, bool f)
         {
@@ -38,7 +38,7 @@ namespace HwWidget
         public static string Pct(double p)
         {
             if (double.IsNaN(p)) return Dash;
-            return Math.Round(Math.Max(0, Math.Min(100, p))).ToString("0", Inv) + "%";
+            return R(Math.Max(0, Math.Min(100, p))).ToString("0", Inv) + "%";
         }
         public static string Rate(double bps)
         {
@@ -46,16 +46,21 @@ namespace HwWidget
             string[] u = { "B/s", "KB/s", "MB/s", "GB/s" };
             double v = Math.Max(0, bps); int i = 0;
             while (v >= 1000 && i < u.Length - 1) { v /= 1024; i++; }
-            return (v < 10 && i > 0 ? v.ToString("0.0", Inv) : Math.Round(v).ToString("0", Inv)) + " " + u[i];
+            return (v < 10 && i > 0 ? v.ToString("0.0", Inv) : R(v).ToString("0", Inv)) + " " + u[i];
         }
         public static string GB(double g)
         {
             if (double.IsNaN(g)) return Dash;
-            return (g < 10 ? g.ToString("0.0", Inv) : Math.Round(g).ToString("0", Inv)) + " GB";
+            return (g < 10 ? g.ToString("0.0", Inv) : R(g).ToString("0", Inv)) + " GB";
         }
+        // Half away from zero, as GNOME and macOS show it (Math.Round alone rounds 68.5 to 68).
+        static double R(double v) { return Math.Round(v, MidpointRounding.AwayFromZero); }
+
+        // Judged on the whole number shown, so 74.6 % reads "75%" and is amber, never "75%" in white.
         public static int Level(double v, double warn, double crit)
         {
             if (double.IsNaN(v)) return 0;
+            v = R(v);
             return v >= crit ? 2 : v >= warn ? 1 : 0;
         }
     }

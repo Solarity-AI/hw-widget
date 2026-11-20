@@ -38,6 +38,24 @@ fake "" 1 41.0
 out=$(run)
 check "GNOME 41 is refused" "$out" "too old"
 
+# TC-124: GNOME refuses an extension whose metadata doesn't list its version; don't claim success there.
+fake "" 0 50.1
+out=$(run)
+check "TC-124 GNOME newer than metadata is refused" "$out" "newer than this HW Widget supports"
+
+# TC-29: GNOME keeps the module it loaded in every state after a disable (INACTIVE on 45+, DISABLED on 42-44).
+for st in INACTIVE DISABLED ERROR; do
+  fake "$st" 0 46.2
+  out=$(run)
+  check "TC-29 reinstall in state $st asks for a log-out" "$out" "Log out and back in to load the new version"
+done
+
+# TC-143: uninstall takes the uuid out of the enabled list that install.sh may have written.
+echo "['ding@rastersoft.com', 'hwwidget@solarity.ai']" > "$tmp/gsettings.txt"
+HOME=$tmp XDG_DATA_HOME=$tmp/share PATH="$tmp/bin:$PATH" sh "$here/uninstall.sh" >/dev/null 2>&1
+check "TC-143 uninstall keeps other extensions only" "$(cat "$tmp/gsettings.txt")" "^\['ding@rastersoft.com'\]$"
+check "TC-143 uninstall removes the extension folder" "$([ -d "$ext" ] && echo kept || echo gone)" "gone"
+
 rm -rf "$tmp"
 echo "$fails failed"
 [ "$fails" -eq 0 ]
