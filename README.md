@@ -13,6 +13,18 @@ Open it for details: GPU temperature and memory, disk activity and upload speed.
 - **No admin or root rights**, no background service, no downloads at install time.
 - **No network access and no telemetry:** the code makes no network calls. The download speed is read from your network adapters' byte counters, not from a speed test.
 
+## Quick start
+
+[Download the latest release](https://github.com/Solarity-AI/hw-widget/releases/latest), unzip it, then in that folder:
+
+| Platform | Install |
+| --- | --- |
+| Windows 10 and 11 | Double-click `Install HW Widget (Windows).cmd` |
+| Linux (GNOME Shell 42–49) | `sh linux/install.sh` |
+| macOS 13 or later | `./macos/install.sh` |
+
+The pill starts right away (on GNOME, log out and back in once if the script asks) and starts with your computer from then on. Details, the optional CPU temperature helper and antivirus notes are under [Install](#install).
+
 ![Windows pill](docs/images/windows-pill.png)
 
 ![Windows pill under load](docs/images/windows-pill-hot.png)
@@ -132,11 +144,11 @@ Each command removes the widget, its startup entry and its settings. Run it from
 | Windows | `windows\build.cmd`, then `windows\bin\HWWidget.exe --selftest out.txt` | 48 sensor, helper, install, layout, formatting, full-screen and accessibility checks |
 | Windows | `windows\tests\scripts-test.ps1` | 8 build, install and uninstall checks (folder names with brackets, spaces, parentheses and `&`; a fresh self-test report; the Startup shortcut) |
 | Windows | `HWWidget.exe --render <dir>` / `--probe <secs> <csv>` | PNG renders of every state / live sensor log |
-| Linux | `sh linux/tests/run-docker.sh` | 80 parser, sensor-tree, nvidia-smi and model checks, 15 GNOME 42 module checks and 16 install and uninstall checks, in Docker on Debian trixie (GNOME 45+) and Ubuntu 22.04 (GNOME 42), plus PNG renders in `linux/tests/out` |
+| Linux | `sh linux/tests/run-docker.sh` | 92 parser, sensor-tree, nvidia-smi and model checks, 15 GNOME 42 module checks and 16 install and uninstall checks, in Docker on Debian trixie (GNOME 45+) and Ubuntu 22.04 (GNOME 42), plus PNG renders in `linux/tests/out` |
 | macOS | `sh macos/tests/run-docker.sh` | 63 model, parser, settings and menu-bar fit checks of the shared core, on Linux in Docker |
 | macOS | `HWWidget --self-test`, `--probe 10`, `--render <dir>` | The same checks, a live sensor log and PNG renders, on a Mac |
 
-CI runs all 3 platforms on pull requests and on manual runs, each only when its folder changes.
+CI runs all 3 platforms on pull requests and on manual runs, each only when its folder changes (Windows also when a root installer `.cmd` changes).
 
 ## Status
 
