@@ -47,7 +47,9 @@ Get the code first: [download the latest release](https://github.com/Solarity-AI
 Double-click `Install HW Widget (Windows).cmd`.
 
 It compiles the widget with the C# compiler built into Windows straight into `%LOCALAPPDATA%\HWWidget` (no SDK, no PowerShell, no downloads, no admin rights). The widget then runs its self-test, adds a shortcut to your Startup folder and starts.
-Updating is the same: run the installer again.
+Updating is the same: run the installer again. The new build is compiled first, so a failed build leaves the running widget alone.
+
+Started from a terminal inside a Store app (for example the Claude desktop app), the installer would only reach that app's private copy of your user folders, so the widget would vanish when the app closes and never start at sign-in. The installer notices this and runs the install through a one-time Task Scheduler task instead, then deletes the task. `--check-sandbox` only reports which case applies.
 
 Antivirus: older versions installed through a PowerShell script, a registry Run key and an automatic admin step, which Bitdefender's Advanced Threat Defense flagged as a dropper. The installer no longer does any of that, but the exe is still unsigned and built on your PC, so an antivirus can still block it. If yours does, add an exception for the repository folder and `%LOCALAPPDATA%\HWWidget`.
 The pill sits on the taskbar left of the tray. Hover for the details card, click to pin it, right-click for settings.
