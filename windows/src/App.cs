@@ -174,22 +174,11 @@ namespace HwWidget
             catch { }
         }
 
-        const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+        // A shortcut in the user's Startup folder (Install.cs); installs before v1.2 used the HKCU Run key.
         public static bool StartsWithWindows
         {
-            get { try { using (RegistryKey k = Registry.CurrentUser.OpenSubKey(RunKey)) return k != null && k.GetValue("HWWidget") != null; } catch { return false; } }
-            set
-            {
-                try
-                {
-                    using (RegistryKey k = Registry.CurrentUser.CreateSubKey(RunKey))
-                    {
-                        if (value) k.SetValue("HWWidget", "\"" + Application.ExecutablePath + "\"");
-                        else k.DeleteValue("HWWidget", false);
-                    }
-                }
-                catch { }
-            }
+            get { return Startup.Enabled; }
+            set { Startup.Set(value, null); }
         }
     }
 
@@ -846,6 +835,11 @@ namespace HwWidget
             above.Add(new KeyValuePair<string, Native.RECT>("Shell_TrayWnd", barR));
             check("z-order: a taskbar raised over the pill is detected", ZOrder.ShellCovers(above, pillR));
 
+            check("install: gate passes only a clean report", SelfInstall.GatePasses("48 passed, 0 failed") && !SelfInstall.GatePasses("47 passed, 1 failed") && !SelfInstall.GatePasses(null) && !SelfInstall.GatePasses(""));
+            InstallArgs ia = InstallArgs.Parse(new string[] { "--install", "--CPU-TEMP", "--startup", @"C:\x y", "--no-launch" }, 1);
+            check("install: arguments parse", ia.CpuTemp && ia.NoLaunch && !ia.KeepHelper && ia.StartupDir == @"C:\x y" && !InstallArgs.Parse(new string[] { "--install" }, 1).CpuTemp);
+            check("install: startup shortcut sits in the user's Startup folder", Startup.LinkPath(null) == Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "HW Widget.lnk"));
+
             Size ps = Painter.PillSize(4, 1.25f);
             check("pill: 192x34 DIP -> 240x43 px at 125%", ps.Width == 240 && ps.Height == 43);
             ps = Painter.PillSize(5, 1.25f);
@@ -871,6 +865,8 @@ namespace HwWidget
                 if (args.Length >= 1 && args[0] == "--sensor-helper") return SensorHelper.Run();
                 if (args.Length >= 1 && args[0] == "--install-helper") return HelperSetup.Install();
                 if (args.Length >= 1 && args[0] == "--uninstall-helper") return HelperSetup.Uninstall();
+                if (args.Length >= 1 && args[0] == "--install") return SelfInstall.Install(InstallArgs.Parse(args, 1));
+                if (args.Length >= 1 && args[0] == "--uninstall") return SelfInstall.Uninstall(InstallArgs.Parse(args, 1));
             }
             catch (Exception ex)
             {
