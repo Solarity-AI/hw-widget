@@ -7,7 +7,14 @@ set "EXE=%LOCALAPPDATA%\HWWidget\HWWidget.exe"
 echo Installing HW Widget...
 taskkill /IM HWWidget.exe /F >nul 2>&1
 call "%~dp0windows\build.cmd" "%EXE%"
-if errorlevel 1 goto fail
+if not errorlevel 1 goto built
+rem The old widget can hold its exe for a moment after taskkill, and an antivirus can lock a fresh exe while it
+rem scans it: wait and try once more before giving up.
+echo      Retrying in 3 seconds...
+timeout /t 3 /nobreak >nul 2>&1
+call "%~dp0windows\build.cmd" "%EXE%"
+if errorlevel 1 goto buildfail
+:built
 start "" /wait "%EXE%" --install %*
 set "RC=%errorlevel%"
 if "%RC%"=="3" goto selftest
@@ -28,7 +35,12 @@ goto end
 echo OK   HW Widget installed and running.
 echo WARN CPU temperature helper not installed (admin prompt declined or failed).
 goto end
+:buildfail
+echo ERROR Could not build "%EXE%".
+echo      If the message above says "Access is denied", your antivirus is blocking the file: add an exception
+echo      for "%LOCALAPPDATA%\HWWidget" and this folder, then run the installer again.
+goto end
 :fail
-echo ERROR Install failed (code %RC%).
+echo ERROR Install failed (exit code %RC%).
 :end
 pause
