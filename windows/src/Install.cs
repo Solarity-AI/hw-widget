@@ -57,7 +57,9 @@ namespace HwWidget
                 else if (File.Exists(LinkPath(dir))) File.Delete(LinkPath(dir));
             }
             catch { ok = false; }
-            if (dir == null) RemoveRunValue();
+            // Open the Run key for writing only when the old value is really there: an antivirus's behaviour monitor
+            // counts every write-open of a Run key as a step towards "persistence", even one that changes nothing.
+            if (dir == null && RunValueExists()) RemoveRunValue();
             return ok;
         }
 
