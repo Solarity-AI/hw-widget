@@ -187,6 +187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ n: Notification) {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.autosaveName = "HWWidget"
         item.button?.imagePosition = .imageOnly
         item.button?.toolTip = "HW Widget"
         let menu = NSMenu()
@@ -196,9 +197,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         render()
         restartTimer()
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(themeChanged), name: Notification.Name("AppleInterfaceThemeChangedNotification"), object: nil)
+        NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main) { [weak self] n in
+            guard let self, (n.object as? NSWindow) === self.item.button?.window else { return }
+            self.scheduleFit()
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.retryFullPill()
+        }
+        scheduleFit()
     }
 
     @objc func themeChanged() { render() }
+
+    // MARK: Fitting the menu bar
+
+    /// Cells shown in the pill; fewer than all of them only while the full pill would be hidden by macOS.
+    var pillFit = PillFit(preferred: 0)
+    private var fitWork: DispatchWorkItem?
+    private var lastFullRetry = Date()
+
+    /// Checks after the menu bar settles, so a transient state (a full-screen app, a screen change) is ignored.
+    func scheduleFit(after delay: TimeInterval = 1.5) {
+        fitWork?.cancel()
+        let w = DispatchWorkItem { [weak self] in self?.fit() }
+        fitWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: w)
+    }
+
+    func fit() {
+        // The item is also occluded while the menu bar itself is hidden: nothing to fix then.
+        guard NSMenu.menuBarVisible(), let w = item.button?.window else { return }
+        let visible = w.occlusionState.contains(.visible)
+        var slack: Double?
+        if visible, let notch = w.screen?.auxiliaryTopRightArea { slack = Double(w.frame.minX - notch.minX) }
+        guard pillFit.update(visible: visible, slack: slack, cellWidth: Double(Pill.cell)) else { return }
+        render()
+        scheduleFit()
+    }
+
+    /// The screen changed, or (without a notch, where the free room is unknown) every 30 minutes:
+    /// try the full pill again; it is trimmed again if macOS hides it.
+    func retryFullPill() {
+        lastFullRetry = Date()
+        guard pillFit.count < pillFit.preferred else { return }
+        pillFit.reset()
+        render()
+        scheduleFit()
+    }
 
     var isDark: Bool { NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
 
@@ -215,6 +260,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         snap = sampler.sample()
         render()
         if card.window?.isVisible == true { updateCard() }
+        if pillFit.count < pillFit.preferred {
+            // Room can open up when another app quits; with a notch the gap is measured, so this costs no flicker.
+            if item.button?.window?.screen?.auxiliaryTopRightArea != nil { fit() }
+            else if Date().timeIntervalSince(lastFullRetry) > 1800 { retryFullPill() }
+        }
     }
 
     func cells() -> [Cell] {
@@ -223,21 +273,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func render() {
-        let c = cells()
+        let all = cells()
+        if all.count != pillFit.preferred {
+            // First render, or the download cell was switched on or off: start from the full pill.
+            pillFit = PillFit(preferred: all.count)
+            scheduleFit()
+        }
+        let c = Array(all.prefix(pillFit.count))
         let size = Pill.size(c.count)
         let scale = item.button?.window?.backingScaleFactor ?? 2
         let rep = renderImage(size: size, scale: scale) { drawPill(c, .darkTheme) }
         let img = NSImage(size: size)
         img.addRepresentation(rep)
         item.button?.image = img
-        item.button?.setAccessibilityLabel(accessibleText(c))
+        item.button?.setAccessibilityLabel(accessibleText(all))
     }
 
     func updateCard() {
         let p: Palette = isDark ? .darkTheme : .lightTheme
         card.rows = cardRows(snap, fahrenheit: settings.fahrenheit, palette: p)
         card.palette = p
-        card.footer = "Updates every \(Int(settings.interval)) s \u{00B7} no admin rights needed"
+        card.footer = pillFit.count < pillFit.preferred ? "Menu bar full: pill shows \(pillFit.count) of \(pillFit.preferred) metrics"
+                                   : "Updates every \(Int(settings.interval)) s \u{00B7} no admin rights needed"
         card.setFrameSize(Card.size(card.rows.count))
         card.needsDisplay = true
     }
