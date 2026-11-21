@@ -1,6 +1,7 @@
 @echo off
-rem Installs HW Widget for the current user: compiles it into %LOCALAPPDATA%\HWWidget, then the widget itself
-rem runs its self-test, adds a shortcut to your Startup folder and starts. No PowerShell, no admin, no downloads.
+rem Installs HW Widget for the current user: compiles it into %LOCALAPPDATA%\Programs\HW Widget, then the widget
+rem itself runs its self-test, adds a shortcut to your Startup folder and starts. No PowerShell, no admin, no downloads.
+rem If Windows or an antivirus refuses that folder, it builds into windows\bin inside this folder instead.
 rem Add --cpu-temp to also install the CPU temperature helper (1 admin prompt).
 rem --check-sandbox only reports whether this window runs inside an app's private file copy (exit 0 = it does).
 setlocal
@@ -10,7 +11,10 @@ rem of %LOCALAPPDATA% and %APPDATA%: an install from there is invisible to Windo
 rem app. Run the install through Task Scheduler instead, which starts it outside the app.
 call :sandboxed
 if not errorlevel 1 goto outside
-set "DIR=%LOCALAPPDATA%\HWWidget"
+rem Versions up to 1.2.1 installed into %LOCALAPPDATA%\HWWidget (still the settings folder). An antivirus that once
+rem removed that exe can keep refusing new files at the same path, so the app now lives in its own folder.
+set "OLDEXE=%LOCALAPPDATA%\HWWidget\HWWidget.exe"
+set "DIR=%LOCALAPPDATA%\Programs\HW Widget"
 set "EXE=%DIR%\HWWidget.exe"
 set "NEW=%DIR%\HWWidget.new.exe"
 echo Installing HW Widget...
@@ -20,6 +24,13 @@ if not errorlevel 1 goto built
 rem An antivirus can lock a fresh exe while it scans it: wait and try once more before giving up.
 echo      Retrying in 3 seconds...
 call :wait 3
+call "%~dp0windows\build.cmd" "%NEW%"
+if not errorlevel 1 goto built
+del "%NEW%" >nul 2>&1
+echo      That folder is blocked. Installing into this folder instead.
+set "DIR=%~dp0windows\bin"
+set "EXE=%~dp0windows\bin\HWWidget.exe"
+set "NEW=%~dp0windows\bin\HWWidget.new.exe"
 call "%~dp0windows\build.cmd" "%NEW%"
 if errorlevel 1 goto buildfail
 :built
@@ -31,6 +42,7 @@ call :wait 3
 move /y "%NEW%" "%EXE%" >nul 2>&1
 if errorlevel 1 goto swapfail
 :swapped
+if /i not "%EXE%"=="%OLDEXE%" del "%OLDEXE%" >nul 2>&1
 start "" /wait "%EXE%" --install %*
 set "RC=%errorlevel%"
 if "%RC%"=="3" goto selftest
@@ -55,7 +67,7 @@ goto end
 del "%NEW%" >nul 2>&1
 echo ERROR Could not build "%EXE%". Your installed widget was left as it was.
 echo      If the message above says "Access is denied", your antivirus is blocking the file: add an exception
-echo      for "%DIR%" and this folder, then run the installer again.
+echo      for this folder, then run the installer again.
 goto end
 :swapfail
 del "%NEW%" >nul 2>&1
