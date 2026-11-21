@@ -49,7 +49,7 @@ if let dir = argValue("--render") {
     var hot = normal
     hot.cpuTempC = 93; hot.cpuPercent = 96; hot.ramPercent = 91; hot.gpuPercent = 97; hot.gpus[0].percent = 97
     for (name, snap) in [("normal", normal), ("hot", hot), ("unknown", Snapshot())] {
-        let c = buildCells(snap)
+        let c = buildCells(snap, download: true)
         let size = Pill.size(c.count)
         let bar = NSSize(width: size.width + 24, height: 24)
         for scale: CGFloat in [1, 2] {

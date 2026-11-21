@@ -1,4 +1,4 @@
-// HW Widget - shared model: formatting, thresholds, colours and the 4 pill cells.
+// HW Widget - shared model: formatting, thresholds, colours and the pill cells (4, plus the download rate).
 // Pure JavaScript (no GNOME imports) so the tests can run it with plain gjs.
 
 export const DASH = '—';
@@ -88,6 +88,17 @@ export const fmt = {
         }
         return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
     },
+    // The pill's 4-character rate: 0K, 999K, 1.0M, 9.9M, 10M, 999M, 1.0G (1024-based, per second).
+    rateShort(bps) {
+        if (!Number.isFinite(bps)) return DASH;
+        const u = ['K', 'M', 'G'];
+        let v = Math.max(0, bps) / 1024, i = 0;
+        while (v >= 999.5 && i < u.length - 1) {
+            v /= 1024;
+            i++;
+        }
+        return i > 0 && v < 9.95 ? `${v.toFixed(1)}${u[i]}` : `${Math.round(v)}${u[i]}`;
+    },
     gb(g) {
         return Number.isFinite(g) ? `${g < 10 ? g.toFixed(1) : Math.round(g)} GB` : DASH;
     },
@@ -126,7 +137,10 @@ export function emptySnapshot() {
     };
 }
 
-export function buildCells(s, {fahrenheit = false, fourth = 'auto', palette = PALETTES.dark} = {}) {
+// Download rate on a log scale up to 1 Gbit/s.
+export const netFrac = bps => (Number.isFinite(bps) ? Math.log10(1 + Math.max(0, bps)) / Math.log10(1 + 125e6) : NaN);
+
+export function buildCells(s, {fahrenheit = false, fourth = 'auto', download = false, palette = PALETTES.dark} = {}) {
     const p = palette;
     let tc = s.cpuTempC, label = 'TEMP';
     if (!Number.isFinite(tc) && Number.isFinite(s.gpuTempC)) {
@@ -150,6 +164,14 @@ export function buildCells(s, {fahrenheit = false, fourth = 'auto', palette = PA
         cells.push(metric('GPU', s.gpuPercent, THRESHOLDS.gpu, COLORS.gpu, p));
     else
         cells.push(metric('DISK', s.diskPercent, THRESHOLDS.disk, COLORS.disk, p));
+    if (download) {
+        // Never amber or red: a fast download is good news.
+        const [a, b] = COLORS.net;
+        cells.push({
+            label: 'DOWN', value: fmt.rateShort(s.netDownBps), spoken: fmt.rate(s.netDownBps), frac: netFrac(s.netDownBps),
+            bar1: barTone(a, p), bar2: barTone(b, p), labelColor: labelTint(mix(a, b, 0.4), p), valueColor: p.text, level: 0,
+        });
+    }
     return cells;
 }
 
@@ -196,7 +218,7 @@ export function cardRows(s, {fahrenheit = false, palette = PALETTES.dark} = {}) 
     }, level(s.diskPercent, THRESHOLDS.disk)));
     rows.push({
         title: 'Network', sub: `↑ ${fmt.rate(s.netUpBps)} upload`, value: `↓ ${fmt.rate(s.netDownBps)}`,
-        frac: Number.isFinite(s.netDownBps) ? Math.log10(1 + s.netDownBps) / Math.log10(1 + 125e6) : NaN,
+        frac: netFrac(s.netDownBps),
         a: COLORS.net[0], b: COLORS.net[1], valueColor: p.text,
     });
     return rows;
@@ -204,15 +226,16 @@ export function cardRows(s, {fahrenheit = false, palette = PALETTES.dark} = {}) 
 
 // What a screen reader announces for the pill: "TEMP 61°, CPU 23%, RAM 58%, DISK unknown".
 export function accessibleText(cells) {
-    return cells.map(c => `${c.label} ${c.value === DASH ? 'unknown' : c.value}`).join(', ');
+    return cells.map(c => `${c.label} ${c.value === DASH ? 'unknown' : c.spoken ?? c.value}`).join(', ');
 }
 
-// Settings read from disk, with each wrong or missing value replaced by its default (°C, 2 s, auto).
+// Settings read from disk, with each wrong or missing value replaced by its default (°C, 2 s, auto, download shown).
 export function normalizeSettings(raw) {
     const r = raw && typeof raw === 'object' ? raw : {};
     return {
         interval: [1, 2, 5].includes(r.interval) ? r.interval : 2,
         fahrenheit: r.fahrenheit === true,
         fourth: ['auto', 'gpu', 'disk'].includes(r.fourth) ? r.fourth : 'auto',
+        download: r.download !== false,
     };
 }

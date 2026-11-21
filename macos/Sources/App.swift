@@ -218,7 +218,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func cells() -> [Cell] {
-        buildCells(snap, fahrenheit: settings.fahrenheit, fourth: Fourth(rawValue: settings.fourth) ?? .auto, palette: .darkTheme)
+        buildCells(snap, fahrenheit: settings.fahrenheit, fourth: Fourth(rawValue: settings.fourth) ?? .auto,
+                   download: settings.download, palette: .darkTheme)
     }
 
     func render() {
@@ -229,7 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let img = NSImage(size: size)
         img.addRepresentation(rep)
         item.button?.image = img
-        item.button?.setAccessibilityLabel(c.map { "\($0.label) \($0.value)" }.joined(separator: ", "))
+        item.button?.setAccessibilityLabel(accessibleText(c))
     }
 
     func updateCard() {
@@ -259,6 +260,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(choice("Fourth metric", fourth.map { ($0.0.rawValue == settings.fourth, $0.1, $0.0.rawValue as Any) }) { [weak self] v in
             self?.settings.fourth = v as! String
         })
+        let down = action("Show download speed", #selector(toggleDownload))
+        down.state = settings.download ? .on : .off
+        menu.addItem(down)
         let login = action("Open at Login", #selector(toggleLogin))
         login.state = FileManager.default.fileExists(atPath: launchAgent.path) ? .on : .off
         menu.addItem(login)
@@ -297,6 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return it
     }
 
+    @objc func toggleDownload() { settings.download.toggle(); settings.save(); render() }
     @objc func toggleLogin() { setOpenAtLogin(!FileManager.default.fileExists(atPath: launchAgent.path)) }
     @objc func openActivityMonitor() { NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app")) }
     @objc func quit() { NSApp.terminate(nil) }

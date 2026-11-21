@@ -133,6 +133,7 @@ namespace HwWidget
         public bool Fahrenheit;
         public Fourth FourthMetric = Fourth.Auto;
         public int OffsetFromRight = -1;          // DIP from the taskbar's right edge; -1 = automatic
+        public bool Download = true;              // the live download-rate cell
 
         public static string Dir { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HWWidget"); } }
         static string FilePath { get { return Path.Combine(Dir, "settings.ini"); } }
@@ -154,6 +155,7 @@ namespace HwWidget
                     else if (k == "unit") s.Fahrenheit = v.ToUpperInvariant() == "F";
                     else if (k == "fourth") s.FourthMetric = v == "gpu" ? Fourth.Gpu : v == "disk" ? Fourth.Disk : Fourth.Auto;
                     else if (k == "offset" && int.TryParse(v, out n)) s.OffsetFromRight = n;
+                    else if (k == "download") s.Download = v.ToLowerInvariant() != "off";
                 }
             }
             catch { }
@@ -166,8 +168,8 @@ namespace HwWidget
             {
                 Directory.CreateDirectory(Dir);
                 File.WriteAllText(FilePath, string.Format(CultureInfo.InvariantCulture,
-                    "interval={0}\r\nunit={1}\r\nfourth={2}\r\noffset={3}\r\n",
-                    IntervalSec, Fahrenheit ? "F" : "C", FourthMetric.ToString().ToLowerInvariant(), OffsetFromRight));
+                    "interval={0}\r\nunit={1}\r\nfourth={2}\r\noffset={3}\r\ndownload={4}\r\n",
+                    IntervalSec, Fahrenheit ? "F" : "C", FourthMetric.ToString().ToLowerInvariant(), OffsetFromRight, Download ? "on" : "off"));
             }
             catch { }
         }
@@ -302,7 +304,7 @@ namespace HwWidget
             catch { return true; }
         }
 
-        Cell[] CurrentCells() { return Painter.Cells(last, cfg.Fahrenheit, cfg.FourthMetric, Palette.For(dark)); }
+        Cell[] CurrentCells() { return Painter.Cells(last, cfg.Fahrenheit, cfg.FourthMetric, cfg.Download, Palette.For(dark)); }
 
         void Redraw()
         {
@@ -538,6 +540,7 @@ namespace HwWidget
         void SetInterval(int s) { cfg.IntervalSec = s; cfg.Save(); wake.Set(); }
         void SetUnit(bool f) { cfg.Fahrenheit = f; cfg.Save(); Redraw(); }
         void SetFourth(Fourth f) { cfg.FourthMetric = f; cfg.Save(); Housekeep(); Redraw(); }
+        void SetDownload(bool on) { cfg.Download = on; cfg.Save(); Housekeep(); Redraw(); }
 
         void ShowMenu()
         {
@@ -559,6 +562,8 @@ namespace HwWidget
                 Item("Automatic (GPU, else disk)", cfg.FourthMetric == Fourth.Auto, delegate { SetFourth(Fourth.Auto); }),
                 Item("GPU", cfg.FourthMetric == Fourth.Gpu, delegate { SetFourth(Fourth.Gpu); }),
                 Item("Disk", cfg.FourthMetric == Fourth.Disk, delegate { SetFourth(Fourth.Disk); })));
+            bool down = cfg.Download;
+            menu.Items.Add(Item("Show download speed", down, delegate { SetDownload(!down); }));
             menu.Items.Add(new ToolStripSeparator());
             bool helper = HelperSetup.Installed;
             menu.Items.Add(Item(helper ? "Remove CPU temperature helper (admin)" : "Enable CPU temperature (admin)", false, delegate { ToggleHelper(!helper); }));
@@ -674,7 +679,7 @@ namespace HwWidget
                     HwSnapshot s = k == "live" ? live : Fake(k);
                     foreach (float sc in scales)
                     {
-                        using (Bitmap pill = Painter.Pill(Painter.Cells(s, false, Fourth.Auto, p), p, sc, false))
+                        using (Bitmap pill = Painter.Pill(Painter.Cells(s, false, Fourth.Auto, true, p), p, sc, false))
                         using (Bitmap canvas = new Bitmap(pill.Width + (int)(48 * sc), (int)(48 * sc), PixelFormat.Format32bppArgb))
                         {
                             using (Graphics g = Graphics.FromImage(canvas))
@@ -771,12 +776,12 @@ namespace HwWidget
             check("TC-122 fullscreen: borderless window covering the monitor is full screen", ZOrder.IsFullscreen(monR, monR, false));
 
             HwSnapshot noGpu = new HwSnapshot(); noGpu.CpuPercent = 10; noGpu.DiskPercent = 5;
-            Cell[] c = Painter.Cells(noGpu, false, Fourth.Auto, Palette.For(true));
+            Cell[] c = Painter.Cells(noGpu, false, Fourth.Auto, false, Palette.For(true));
             check("cells: auto shows DISK without a GPU", c.Length == 4 && c[3].Label == "DISK");
             HwSnapshot gpuOnlyTemp = Fake("normal"); gpuOnlyTemp.CpuTempC = double.NaN;
-            c = Painter.Cells(gpuOnlyTemp, false, Fourth.Auto, Palette.For(true));
+            c = Painter.Cells(gpuOnlyTemp, false, Fourth.Auto, false, Palette.For(true));
             check("cells: GPU temperature fallback is labelled", c[0].Label == "GPU°" && c[3].Label == "GPU");
-            check("cells: hot CPU is critical", Painter.Cells(Fake("hot"), false, Fourth.Auto, Palette.For(true))[1].Level == 2);
+            check("cells: hot CPU is critical", Painter.Cells(Fake("hot"), false, Fourth.Auto, true, Palette.For(true))[1].Level == 2);
 
             check("esif: deg C, Kelvin and tenths of Kelvin", EsifPicker.ToCelsius(75) == 75 && EsifPicker.ToCelsius(348.15) == 75 && EsifPicker.ToCelsius(3481.5) == 75);
             check("esif: hottest live participant, zeros and placeholders skipped", EsifPicker.Pick(new double[] { 0, 61, 75, 73, 0, 3010 }) == 75);
@@ -786,10 +791,19 @@ namespace HwWidget
             check("helper file: stale reading ignored", double.IsNaN(HelperFile.Parse(HelperFile.Format(now - 16000, 74, "x"), now, out hs)));
             check("helper file: garbage and implausible values ignored", double.IsNaN(HelperFile.Parse("hello", now, out hs)) && double.IsNaN(HelperFile.Parse(HelperFile.Format(now, 140, "x"), now, out hs)));
             HwSnapshot hinted = Fake("normal"); hinted.CpuTempC = double.NaN; hinted.Gpus = new GpuInfo[0]; hinted.GpuTempC = double.NaN; hinted.CpuTempHint = "Right-click and choose Enable CPU temperature";
-            check("cells: no temperature at all is a dash", Painter.Cells(hinted, false, Fourth.Auto, Palette.For(true))[0].Value == Fmt.Temp(double.NaN, false));
+            check("cells: no temperature at all is a dash", Painter.Cells(hinted, false, Fourth.Auto, true, Palette.For(true))[0].Value == Fmt.Temp(double.NaN, false));
 
             HwSnapshot spoken = new HwSnapshot(); spoken.CpuTempC = 61; spoken.CpuPercent = 23; spoken.RamPercent = 58; spoken.DiskPercent = double.NaN;
-            check("a11y: pill reads as text", Painter.AccessibleText(Painter.Cells(spoken, false, Fourth.Disk, Palette.For(true))) == "TEMP 61°, CPU 23%, RAM 58%, DISK unknown");
+            check("a11y: pill reads as text", Painter.AccessibleText(Painter.Cells(spoken, false, Fourth.Disk, false, Palette.For(true))) == "TEMP 61°, CPU 23%, RAM 58%, DISK unknown");
+            spoken.NetDownBps = 1258291;
+            check("a11y: download cell speaks the full rate", Painter.AccessibleText(Painter.Cells(spoken, false, Fourth.Disk, true, Palette.For(true))).EndsWith(", DOWN 1.2 MB/s"));
+            c = Painter.Cells(Fake("normal"), false, Fourth.Auto, true, Palette.For(true));
+            check("cells: download cell is 5th, never amber or red", c.Length == 5 && c[4].Label == "DOWN" && c[4].Level == 0 && c[4].Value == "178K");
+            check("cells: download cell can be turned off", Painter.Cells(Fake("normal"), false, Fourth.Auto, false, Palette.For(true)).Length == 4);
+            check("rate short: K edges", Fmt.RateShort(0) == "0K" && Fmt.RateShort(999 * 1024) == "999K" && Fmt.RateShort(999.4 * 1024) == "999K");
+            check("rate short: K to M at 999.5 K", Fmt.RateShort(999.5 * 1024) == "1.0M" && Fmt.RateShort(1023 * 1024) == "1.0M" && Fmt.RateShort(1024 * 1024) == "1.0M");
+            check("rate short: one decimal below 9.95 M", Fmt.RateShort(9.94 * 1048576) == "9.9M" && Fmt.RateShort(9.96 * 1048576) == "10M" && Fmt.RateShort(999 * 1048576.0) == "999M");
+            check("rate short: G, negative and unknown", Fmt.RateShort(1000 * 1048576.0) == "1.0G" && Fmt.RateShort(-5) == "0K" && Fmt.RateShort(double.NaN) == Fmt.Dash);
             check("probe: unknown temperature is a dash", Unit(double.NaN, "C") == "—" && Unit(51, "C") == "51C");
             string tmp = Path.GetFullPath(Path.GetTempPath()), pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
             check("helper: task XML sits beside the helper exe", HelperSetup.TaskXmlPath.StartsWith(pf, StringComparison.OrdinalIgnoreCase) && !HelperSetup.TaskXmlPath.StartsWith(tmp, StringComparison.OrdinalIgnoreCase));
@@ -834,6 +848,8 @@ namespace HwWidget
 
             Size ps = Painter.PillSize(4, 1.25f);
             check("pill: 192x34 DIP -> 240x43 px at 125%", ps.Width == 240 && ps.Height == 43);
+            ps = Painter.PillSize(5, 1.25f);
+            check("pill: 5 cells 236x34 DIP -> 295x43 px at 125%", ps.Width == 295 && ps.Height == 43);
 
             lines.Add(string.Format("{0} passed, {1} failed", pass, fail));
             File.WriteAllLines(outFile, lines.ToArray());

@@ -17,6 +17,7 @@ namespace HwWidget
         public double Frac = double.NaN;      // 0..1 for the bar, NaN = empty
         public Color Bar1, Bar2, LabelColor, ValueColor;
         public int Level;                     // 0 normal, 1 warm, 2 critical
+        public string Spoken;                 // what a screen reader says instead of Value, when set
     }
 
     public static class Fmt
@@ -47,6 +48,16 @@ namespace HwWidget
             double v = Math.Max(0, bps); int i = 0;
             while (v >= 1000 && i < u.Length - 1) { v /= 1024; i++; }
             return (v < 10 && i > 0 ? v.ToString("0.0", Inv) : R(v).ToString("0", Inv)) + " " + u[i];
+        }
+        // The pill's 4-character rate: 0K, 999K, 1.0M, 9.9M, 10M, 999M, 1.0G (1024-based, per second).
+        public static string RateShort(double bps)
+        {
+            if (double.IsNaN(bps)) return Dash;
+            string[] u = { "K", "M", "G" };
+            double v = Math.Max(0, bps) / 1024; int i = 0;
+            while (v >= 999.5 && i < u.Length - 1) { v /= 1024; i++; }
+            if (i > 0 && v < 9.95) return v.ToString("0.0", Inv) + u[i];
+            return R(v).ToString("0", Inv) + u[i];
         }
         public static string GB(double g)
         {
@@ -155,11 +166,11 @@ namespace HwWidget
         public static string AccessibleText(Cell[] cells)
         {
             List<string> parts = new List<string>();
-            foreach (Cell c in cells) parts.Add(c.Label + " " + (c.Value == Fmt.Dash ? "unknown" : c.Value));
+            foreach (Cell c in cells) parts.Add(c.Label + " " + (c.Value == Fmt.Dash ? "unknown" : c.Spoken ?? c.Value));
             return string.Join(", ", parts.ToArray());
         }
 
-        public static Cell[] Cells(HwSnapshot s, bool fahrenheit, Fourth fourth, Palette p)
+        public static Cell[] Cells(HwSnapshot s, bool fahrenheit, Fourth fourth, bool download, Palette p)
         {
             List<Cell> cells = new List<Cell>();
 
@@ -180,7 +191,25 @@ namespace HwWidget
             cells.Add(Metric("RAM", s.RamPercent, 80, 90, RamA, RamB, p));
             if (ShowsGpu(s, fourth)) cells.Add(Metric("GPU", s.GpuPercent, 85, 95, GpuA, GpuB, p));
             else cells.Add(Metric("DISK", s.DiskPercent, 80, 95, DskA, DskB, p));
+            if (download) cells.Add(Down(s.NetDownBps, p));
             return cells.ToArray();
+        }
+
+        // Live download rate on a log scale up to 1 Gbit/s; never amber or red, since a fast download is good news.
+        public static double NetFrac(double bps)
+        {
+            return double.IsNaN(bps) ? double.NaN : Math.Log10(1 + Math.Max(0, bps)) / Math.Log10(1 + 125e6);
+        }
+
+        static Cell Down(double bps, Palette p)
+        {
+            Cell c = new Cell();
+            c.Label = "DOWN"; c.Value = Fmt.RateShort(bps); c.Spoken = Fmt.Rate(bps);
+            c.Frac = NetFrac(bps);
+            c.Bar1 = BarTone(NetA, p); c.Bar2 = BarTone(NetB, p);
+            c.LabelColor = LabelTint(Lerp(NetA, NetB, 0.4), p);
+            c.ValueColor = p.Text;
+            return c;
         }
 
         static Cell Metric(string label, double v, double warn, double crit, Color a, Color b, Palette p)
@@ -396,7 +425,7 @@ namespace HwWidget
 
             r = new Row(); r.Title = "Network"; r.Sub = "↑ " + Fmt.Rate(s.NetUpBps) + " upload";
             r.Value = "↓ " + Fmt.Rate(s.NetDownBps);
-            r.Frac = double.IsNaN(s.NetDownBps) ? double.NaN : Math.Log10(1 + s.NetDownBps) / Math.Log10(1 + 125e6);   // log scale to 1 Gbit/s
+            r.Frac = NetFrac(s.NetDownBps);   // log scale to 1 Gbit/s
             r.A = NetA; r.B = NetB; r.ValueColor = p.Text;
             rows.Add(r);
             return rows;

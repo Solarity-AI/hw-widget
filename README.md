@@ -6,12 +6,12 @@
 ![Windows | GNOME | macOS](https://img.shields.io/badge/platforms-Windows%20%7C%20GNOME%20%7C%20macOS-555)
 
 A small, colorful hardware pill for the Windows taskbar, the GNOME top bar and the macOS menu bar.
-It shows the **temperature** plus the 3 metrics that matter most: **CPU**, **memory** and **GPU** (or disk when there is no GPU).
-Open it for details: GPU temperature and memory, disk activity and network speed.
+It shows the **temperature**, the 3 metrics that matter most (**CPU**, **memory** and **GPU**, or disk when there is no GPU) and your live **download speed**.
+Open it for details: GPU temperature and memory, disk activity and upload speed.
 
-- **Free and open source** (MIT), built from source on your machine with the compiler your OS already has.
+- Built from source on your machine with the compiler your OS already has.
 - **No admin or root rights**, no background service, no downloads at install time.
-- **No network access and no telemetry:** the code makes no network calls.
+- **No network access and no telemetry:** the code makes no network calls. The download speed is read from your network adapters' byte counters, not from a speed test.
 
 ![Windows pill](docs/images/windows-pill.png)
 
@@ -31,8 +31,10 @@ Open it for details: GPU temperature and memory, disk activity and network speed
 | **CPU** | Total processor load | 75 / 90 % |
 | **RAM** | Memory in use | 80 / 90 % |
 | **GPU** | Busiest graphics adapter; **DISK** (busiest drive's active time) when there is no GPU | 85 / 95 % (disk 80 / 95 %) |
+| **DOWN** | Live download rate of your physical network adapters (Wi-Fi, Ethernet), local network traffic included, in KB/s, MB/s or GB/s: `178K`, `4.2M`, `46M` | Never; the bar fills on a log scale up to 1 Gbit/s |
 
 Temperatures are in **°C** by default; switch to °F in the menu.
+Turn the download cell off with **Show download speed** in the same menu.
 The colour is judged on the whole number shown, so `75%` CPU is always amber.
 An unknown value shows a dim dash instead of a guess.
 
@@ -118,11 +120,11 @@ Each command removes the widget, its startup entry and its settings. Run it from
 
 | Platform | Command | What it checks |
 | --- | --- | --- |
-| Windows | `windows\build.ps1`, then `windows\bin\HWWidget.exe --selftest out.txt` | 37 sensor, helper, layout, formatting, full-screen and accessibility checks |
+| Windows | `windows\build.ps1`, then `windows\bin\HWWidget.exe --selftest out.txt` | 45 sensor, helper, layout, formatting, full-screen and accessibility checks |
 | Windows | `windows\tests\scripts-test.ps1` | 5 install, uninstall and build script checks (self-test gate, honest uninstall message, folder names with brackets) |
 | Windows | `HWWidget.exe --render <dir>` / `--probe <secs> <csv>` | PNG renders of every state / live sensor log |
-| Linux | `sh linux/tests/run-docker.sh` | 71 parser, sensor-tree, nvidia-smi and model checks, 15 GNOME 42 module checks and 16 install and uninstall checks, in Docker on Debian trixie (GNOME 45+) and Ubuntu 22.04 (GNOME 42), plus PNG renders in `linux/tests/out` |
-| macOS | `sh macos/tests/run-docker.sh` | 44 model, parser and settings checks of the shared core, on Linux in Docker |
+| Linux | `sh linux/tests/run-docker.sh` | 80 parser, sensor-tree, nvidia-smi and model checks, 15 GNOME 42 module checks and 16 install and uninstall checks, in Docker on Debian trixie (GNOME 45+) and Ubuntu 22.04 (GNOME 42), plus PNG renders in `linux/tests/out` |
+| macOS | `sh macos/tests/run-docker.sh` | 54 model, parser and settings checks of the shared core, on Linux in Docker |
 | macOS | `HWWidget --self-test`, `--probe 10`, `--render <dir>` | The same checks, a live sensor log and PNG renders, on a Mac |
 
 CI runs all 3 platforms on pull requests and on manual runs, each only when its folder changes.

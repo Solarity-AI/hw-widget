@@ -59,6 +59,13 @@ class HwIndicator extends PanelMenu.Button {
         this._addChoice('Refresh every', [[1, '1 second'], [2, '2 seconds'], [5, '5 seconds']], 'interval', () => this._restartTimer());
         this._addChoice('Temperature unit', [[false, 'Celsius (°C)'], [true, 'Fahrenheit (°F)']], 'fahrenheit');
         this._addChoice('Fourth metric', [['auto', 'Automatic (GPU, else disk)'], ['gpu', 'GPU'], ['disk', 'Disk']], 'fourth');
+        const down = new PopupMenu.PopupSwitchMenuItem('Show download speed', this._settings.download);
+        down.connect('toggled', (_item, on) => {
+            this._settings.download = on;
+            saveSettings(this._settings);
+            this._refresh(false);
+        });
+        this.menu.addMenuItem(down);
         this.menu.addAction('Open System Monitor', () => {
             try {
                 Gio.AppInfo.create_from_commandline('gnome-system-monitor', null, Gio.AppInfoCreateFlags.NONE).launch([], null);
@@ -100,7 +107,7 @@ class HwIndicator extends PanelMenu.Button {
     }
 
     _cells() {
-        return buildCells(this._snap, {fahrenheit: this._settings.fahrenheit, fourth: this._settings.fourth, palette: PALETTES.dark});
+        return buildCells(this._snap, {fahrenheit: this._settings.fahrenheit, fourth: this._settings.fourth, download: this._settings.download, palette: PALETTES.dark});
     }
 
     _pillScale() {
