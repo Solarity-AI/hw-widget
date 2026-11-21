@@ -99,6 +99,9 @@ Settings are saved in `~/.config/hwwidget/settings.json`.
 ```
 
 It needs the Command Line Tools (`xcode-select --install`), builds `HW Widget.app` into `~/Applications`, starts it and adds it to login items.
+
+If the menu bar is too full for the whole pill (on a notched MacBook, the room right of the notch), the pill drops cells from the right (download, GPU, RAM, then CPU) instead of being moved into macOS's hidden menu bar items, and grows back when room opens up. The details card always shows every metric.
+
 Sensors: Mach host statistics (CPU, memory), IOKit (GPU load and memory, disk activity per drive), the Apple Silicon thermal sensors or the Intel SMC for temperatures, and macOS's thermal state as a fallback.
 Settings are saved in `~/Library/Application Support/HW Widget/settings.json`.
 
@@ -130,7 +133,7 @@ Each command removes the widget, its startup entry and its settings. Run it from
 | Windows | `windows\tests\scripts-test.ps1` | 8 build, install and uninstall checks (folder names with brackets, spaces, parentheses and `&`; a fresh self-test report; the Startup shortcut) |
 | Windows | `HWWidget.exe --render <dir>` / `--probe <secs> <csv>` | PNG renders of every state / live sensor log |
 | Linux | `sh linux/tests/run-docker.sh` | 80 parser, sensor-tree, nvidia-smi and model checks, 15 GNOME 42 module checks and 16 install and uninstall checks, in Docker on Debian trixie (GNOME 45+) and Ubuntu 22.04 (GNOME 42), plus PNG renders in `linux/tests/out` |
-| macOS | `sh macos/tests/run-docker.sh` | 54 model, parser and settings checks of the shared core, on Linux in Docker |
+| macOS | `sh macos/tests/run-docker.sh` | 63 model, parser, settings and menu-bar fit checks of the shared core, on Linux in Docker |
 | macOS | `HWWidget --self-test`, `--probe 10`, `--render <dir>` | The same checks, a live sensor log and PNG renders, on a Mac |
 
 CI runs all 3 platforms on pull requests and on manual runs, each only when its folder changes.

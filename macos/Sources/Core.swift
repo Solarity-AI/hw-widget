@@ -357,6 +357,42 @@ extension Settings {
     }
 }
 
+/// How many pill cells fit the menu bar. macOS moves a status item that does not fit (on a notched Mac:
+/// wider than the gap between the notch and the other items) into "Show Hidden Menu Bar Items", so the
+/// pill looks gone. Hidden: drop the last cell, never below 1. Shown with room for another cell
+/// (`slack`, the gap between the notch and the pill, nil when unknown): add one back. A grow that ended
+/// hidden blocks the next grow until the slack is larger than it was, so the pill never flickers.
+struct PillFit {
+    var preferred: Int
+    var count: Int
+    /// Item window chrome around the image (measured 16 pt on macOS 27) plus a few points of margin.
+    static let growMargin = 20.0
+    private var grewAtSlack: Double?
+    private var blockedSlack: Double?
+
+    init(preferred: Int) { self.preferred = preferred; count = preferred }
+
+    /// Returns true when `count` changed.
+    mutating func update(visible: Bool, slack: Double?, cellWidth: Double) -> Bool {
+        let old = count
+        if !visible {
+            if let g = grewAtSlack { blockedSlack = g }
+            grewAtSlack = nil
+            count = max(1, min(count, preferred) - 1)
+        } else {
+            grewAtSlack = nil
+            if count < preferred, let slack, slack >= cellWidth + PillFit.growMargin, slack > (blockedSlack ?? -.infinity) {
+                grewAtSlack = slack
+                count += 1
+            }
+        }
+        return count != old
+    }
+
+    /// The screen changed or a periodic retry: try the full pill again.
+    mutating func reset() { count = preferred; grewAtSlack = nil; blockedSlack = nil }
+}
+
 // MARK: - Self-test (runs on macOS with --self-test and on Linux through tests/main.swift)
 
 func coreSelfTest() -> (passed: Int, failed: Int) {
@@ -444,5 +480,20 @@ func coreSelfTest() -> (passed: Int, failed: Int) {
     check("rows: temp, cpu, memory, 1 GPU, disk, network", cardRows(hot).map(\.title) == ["Temperature", "CPU", "Memory", "GPU", "Disk", "Network"])
     check("rows: critical GPU bar is amber to red", cardRows(hot)[3].a == Colors.warm && cardRows(hot)[3].b == Colors.hot)
     check("rows: thermal state shown as value", cardRows(therm)[0].value == "Serious")
+
+    var fit = PillFit(preferred: 4)
+    check("fit: hidden pill drops a cell", fit.update(visible: false, slack: nil, cellWidth: 35) && fit.count == 3)
+    // Measured on a 14" MacBook (macOS 27): 3 cells shown 41.5 pt from the notch, 4 cells hidden. Must not grow and flicker.
+    check("fit: 41.5 pt slack is not room for a 35 pt cell", !fit.update(visible: true, slack: 41.5, cellWidth: 35) && fit.count == 3)
+    check("fit: real room grows back", fit.update(visible: true, slack: 60, cellWidth: 35) && fit.count == 4)
+    check("fit: grow that ended hidden shrinks", fit.update(visible: false, slack: nil, cellWidth: 35) && fit.count == 3)
+    check("fit: same slack after a failed grow does not regrow", !fit.update(visible: true, slack: 60, cellWidth: 35) && fit.count == 3)
+    check("fit: more slack than the failed grow regrows", fit.update(visible: true, slack: 61, cellWidth: 35) && fit.count == 4)
+    check("fit: unknown slack never grows", { var f = PillFit(preferred: 4); _ = f.update(visible: false, slack: nil, cellWidth: 35); return !f.update(visible: true, slack: nil, cellWidth: 35) && f.count == 3 }())
+    var one = PillFit(preferred: 4)
+    for _ in 0..<6 { _ = one.update(visible: false, slack: nil, cellWidth: 35) }
+    check("fit: never below 1 cell", one.count == 1)
+    one.reset()
+    check("fit: reset tries the full pill", one.count == 4)
     return (passed, failed)
 }
