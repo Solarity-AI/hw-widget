@@ -61,7 +61,8 @@ echo WARN HW Widget is running, but the Startup shortcut could not be created. T
 goto end
 :helper
 echo OK   HW Widget installed and running.
-echo WARN CPU temperature helper not installed (admin prompt declined or failed).
+echo WARN CPU temperature helper not installed: the admin prompt was declined or failed.
+echo      To try again, right-click the pill and choose Enable CPU temperature (admin).
 goto end
 :buildfail
 del "%NEW%" >nul 2>&1

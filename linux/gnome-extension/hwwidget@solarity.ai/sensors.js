@@ -28,13 +28,14 @@ export function listDir(path) {
     return out.sort();
 }
 
-// One hwmon chip folder -> {name, dir, temps: [{label, c}]}
-export function readChip(dir) {
+// The static part of a chip folder (its name and which temperature inputs it has, with their labels), so a
+// sample reads only the input files.
+export function chipLayout(dir) {
     const name = (readText(`${dir}/name`) || '').trim();
-    const temps = listDir(dir).filter(f => /^temp\d+_input$/.test(f)).map(f => {
-        const label = (readText(`${dir}/${f.replace('_input', '_label')}`) || '').trim();
-        return {label, c: Number((readText(`${dir}/${f}`) || '').trim()) / 1000};
-    });
+    const temps = listDir(dir).filter(f => /^temp\d+_input$/.test(f)).map(f => ({
+        label: (readText(`${dir}/${f.replace('_input', '_label')}`) || '').trim(),
+        input: `${dir}/${f}`,
+    }));
     return {name, dir, temps};
 }
 
@@ -301,33 +302,72 @@ export class Sampler {
         }
     }
 
-    _hwmon() {
-        const base = this._p('sys/class/hwmon');
-        return listDir(base).map(h => readChip(`${base}/${h}`));
+    // The sensor folders, adapters and NICs almost never change, so list them once and rescan every 30 s,
+    // or at once when a cached folder disappears (a GPU driver reload, a USB adapter unplugged).
+    _topology(now) {
+        if (this._topo && now < this._topo.until) return this._topo;
+        const hw = this._p('sys/class/hwmon');
+        const th = this._p('sys/class/thermal');
+        const drm = this._p('sys/class/drm');
+        const net = this._p('sys/class/net');
+        this._topo = {
+            until: now + 30000,
+            hwmon: listDir(hw).map(h => chipLayout(`${hw}/${h}`)),
+            zones: listDir(th).filter(z => z.startsWith('thermal_zone')).map(z => ({dir: `${th}/${z}`, type: (readText(`${th}/${z}/type`) || '').trim()})),
+            cards: listDir(drm).filter(c => /^card\d+$/.test(c))
+                .filter(c => GLib.file_test(`${drm}/${c}/device/gpu_busy_percent`, GLib.FileTest.EXISTS))
+                .map(c => ({dir: `${drm}/${c}/device`, hwmon: listDir(`${drm}/${c}/device/hwmon`).map(h => chipLayout(`${drm}/${c}/device/hwmon/${h}`))})),
+            phys: listDir(net).filter(n => GLib.file_test(`${net}/${n}/device`, GLib.FileTest.EXISTS)),
+        };
+        return this._topo;
     }
 
-    _zones() {
-        const base = this._p('sys/class/thermal');
-        return listDir(base).filter(z => z.startsWith('thermal_zone')).map(z => ({
-            type: (readText(`${base}/${z}/type`) || '').trim(),
-            c: Number((readText(`${base}/${z}/temp`) || '').trim()) / 1000,
-        }));
+    _rescanSoon() {
+        if (this._topo) this._topo.until = 0;
     }
 
-    _amdGpus(chips) {
-        const base = this._p('sys/class/drm');
+    // Reads only the temperature inputs of a chip whose name and labels were read at the last rescan.
+    _readLayout(l) {
+        const temps = [];
+        for (const t of l.temps) {
+            const raw = readText(t.input);
+            if (raw === null) {
+                this._rescanSoon();
+                continue;
+            }
+            temps.push({label: t.label, c: Number(raw.trim()) / 1000});
+        }
+        return {name: l.name, dir: l.dir, temps};
+    }
+
+    _hwmon(topo) {
+        return topo.hwmon.map(l => this._readLayout(l));
+    }
+
+    _zones(topo) {
+        return topo.zones.map(z => {
+            const raw = readText(`${z.dir}/temp`);
+            if (raw === null) this._rescanSoon();
+            return {type: z.type, c: Number((raw || '').trim()) / 1000};
+        });
+    }
+
+    _amdGpus(chips, topo) {
         const out = [];
-        for (const card of listDir(base).filter(c => /^card\d+$/.test(c))) {
-            const busy = readText(`${base}/${card}/device/gpu_busy_percent`);
-            if (busy === null) continue;
+        for (const card of topo.cards) {
+            const busy = readText(`${card.dir}/gpu_busy_percent`);
+            if (busy === null) {
+                this._rescanSoon();
+                continue;
+            }
             const g = {name: 'AMD Radeon GPU', percent: Number(busy.trim()), tempC: NaN, memUsedGB: NaN, integrated: false};
-            const vram = readText(`${base}/${card}/device/mem_info_vram_used`);
+            const vram = readText(`${card.dir}/mem_info_vram_used`);
             if (vram !== null) g.memUsedGB = Number(vram.trim()) / 1024 ** 3;
-            const total = readText(`${base}/${card}/device/mem_info_vram_total`);
+            const total = readText(`${card.dir}/mem_info_vram_total`);
             if (total !== null && Number(total.trim()) < 1024 ** 3) g.integrated = true;
             // Each card's own sensor sits under its device; the first amdgpu chip is only a fallback
             // for kernels that don't link it there.
-            const own = listDir(`${base}/${card}/device/hwmon`).map(h => readChip(`${base}/${card}/device/hwmon/${h}`));
+            const own = card.hwmon.map(l => this._readLayout(l));
             const chip = own.find(c => c.temps.length) || chips.find(c => c.name === 'amdgpu' && c.temps.length);
             if (chip) g.tempC = (chip.temps.find(t => /edge/i.test(t.label)) || chip.temps[0]).c;
             out.push(g);
@@ -340,6 +380,7 @@ export class Sampler {
         s.cpuName = this._cpuName;
         const now = this._clock();
         const elapsed = this._prevAt ? now - this._prevAt : 0;
+        const topo = this._topology(now);
 
         const cpu = parseCpuTimes(readText(this._p('proc/stat')));
         s.cpuPercent = cpuPercent(this._prevCpu, cpu);
@@ -352,8 +393,8 @@ export class Sampler {
             s.ramTotalGB = mem.totalGB;
         }
 
-        const chips = this._hwmon();
-        const t = pickCpuTemp(chips, this._zones());
+        const chips = this._hwmon(topo);
+        const t = pickCpuTemp(chips, this._zones(topo));
         if (t) {
             s.cpuTempC = Math.round(t.c * 10) / 10;
             s.cpuTempSource = t.source;
@@ -365,8 +406,7 @@ export class Sampler {
 
         // Count only physical NICs (those with a device link) where /sys tells them apart: bridge, bond and
         // VPN interfaces repeat bytes a NIC already counted.
-        const netDir = this._p('sys/class/net');
-        const phys = listDir(netDir).filter(n => GLib.file_test(`${netDir}/${n}/device`, GLib.FileTest.EXISTS));
+        const phys = topo.phys;
         const keep = phys.length ? n => phys.includes(n) : null;
         const net = parseNetDev(readText(this._p('proc/net/dev')), keep);
         if (net && this._prevNet && elapsed > 0) {
@@ -382,7 +422,7 @@ export class Sampler {
         const maxAge = this._nvPm?.length ? 40000 : 10000;   // sleep-aware readings come at most every 30 s
         const gpus = [...this._nvidia.values()].filter(g => now - g.at < maxAge)
             .map(g => (g.asleep ? {...g, name: `${g.name} · asleep`} : g))
-            .concat(this._amdGpus(chips));
+            .concat(this._amdGpus(chips, topo));
         s.gpus = gpus;
         let busiest = null;
         for (const g of gpus) {

@@ -106,6 +106,29 @@ for (const kind of ['intel', 'amd', 'arm', 'empty']) {
     if (kind === 'amd') check('sampler/amd: Radeon GPU 37%, 47 C, integrated', s.gpuPercent === 37 && s.gpuTempC === 47 && s.gpus[0].integrated);
 }
 
+// #207: the sensor folders are listed once and rescanned every 30 s, or at once when a cached one goes away.
+{
+    const root = fakeRoot('intel');
+    let t = 1000000;
+    const smp = new S.Sampler({root, nvidia: false, clock: () => t});
+    let s = smp.sample();
+    check('topology: first sample reads coretemp', near(s.cpuTempC, 64, 0.1), s.cpuTempC);
+    write(root, 'sys/class/hwmon/hwmon3/temp1_input', '66000\n');
+    t += 2000; s = smp.sample();
+    check('topology: cached inputs are still read every tick', near(s.cpuTempC, 66, 0.1), s.cpuTempC);
+    write(root, 'sys/class/drm/card0/device/gpu_busy_percent', '12\n');
+    t += 2000; s = smp.sample();
+    check('topology: a new folder waits for the next rescan', s.gpus.length === 0, s.gpus.length);
+    t += 30000; s = smp.sample();
+    check('topology: the rescan after 30 s finds it', s.gpus.length === 1 && s.gpuPercent === 12, s.gpus.length);
+    rmrf(`${root}/sys/class/drm/card0`);
+    t += 2000; smp.sample();
+    t += 2000; s = smp.sample();
+    check('topology: a vanished folder triggers a rescan at once', s.gpus.length === 0, s.gpus.length);
+    smp.destroy();
+    rmrf(root);
+}
+
 // ---------------------------------------------------------------- regressions found by the QA bug hunt
 // QA: every AMD GPU showed the first amdgpu hwmon chip's temperature.
 {
@@ -298,6 +321,16 @@ check('fmt: rate', M.fmt.rate(1536) === '1.5 KB/s' && M.fmt.rate(48e6) === '46 M
         M.accessibleText(M.buildCells({...M.emptySnapshot(), netDownBps: 1258291}, {download: true})).endsWith(', DOWN 1.2 MB/s'));
     check('a11y: unknown download rate', M.accessibleText(M.buildCells(M.emptySnapshot(), {download: true})).endsWith(', DOWN unknown'));
 }
+
+// #204: edge cases of the shared formatting helpers, the same ones macos/tests/main.swift checks.
+check('fmt: pct clamps and rounds', M.fmt.pct(-3) === '0%' && M.fmt.pct(99.5) === '100%' && M.fmt.pct(150) === '100%' && M.fmt.pct(NaN) === M.DASH);
+check('fmt: tempLong adds the unit', M.fmt.tempLong(20) === '20°C' && M.fmt.tempLong(20, true) === '68°F' && M.fmt.tempLong(NaN) === M.DASH);
+check('fmt: gb has 1 decimal below 10', M.fmt.gb(0) === '0.0 GB' && M.fmt.gb(9.94) === '9.9 GB' && M.fmt.gb(10) === '10 GB' && M.fmt.gb(NaN) === M.DASH);
+check('netFrac: 0 -> 0, 1 Gbit/s -> 1, negative -> 0, unknown -> NaN',
+    M.netFrac(0) === 0 && near(M.netFrac(125e6), 1, 1e-9) && M.netFrac(-5) === 0 && Number.isNaN(M.netFrac(NaN)));
+check('netFrac: grows with the rate', M.netFrac(1e3) < M.netFrac(1e6) && M.netFrac(1e6) < M.netFrac(1e8));
+check('tempColor: ends of the ramp and unknown', M.tempColor(20) === '#22D3EE' && M.tempColor(35) === '#22D3EE' && M.tempColor(95) === '#F43F5E' && M.tempColor(120) === '#F43F5E' && M.tempColor(NaN) === '#94A3B8');
+check('tempColor: ramp stops are exact', M.tempColor(50).toUpperCase() === '#34D399' && M.tempColor(75).toUpperCase() === '#FACC15', M.tempColor(50));
 
 // ---------------------------------------------------------------- render PNGs with the real drawing code
 const out = ARGV[0] || GLib.get_tmp_dir();

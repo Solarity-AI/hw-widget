@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       windows: ${{ steps.f.outputs.windows }}
       linux: ${{ steps.f.outputs.linux }}
@@ -28,14 +28,16 @@ jobs:
             echo "windows=true" >> "$GITHUB_OUTPUT"; echo "linux=true" >> "$GITHUB_OUTPUT"; echo "macos=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           files=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          # The Windows installers live at the repo root, and windows/tests/scripts-test.ps1 tests them.
           for p in windows linux macos; do
-            if echo "$files" | grep -qE "^($p/|\.github/)"; then echo "$p=true" >> "$GITHUB_OUTPUT"; else echo "$p=false" >> "$GITHUB_OUTPUT"; fi
+            extra='^/'; [ "$p" = windows ] && extra='^[^/]* \(Windows\)\.cmd$'
+            if echo "$files" | grep -qE "^($p/|\.github/)|$extra"; then echo "$p=true" >> "$GITHUB_OUTPUT"; else echo "$p=false" >> "$GITHUB_OUTPUT"; fi
           done
 
   windows:
     needs: changes
     if: needs.changes.outputs.windows == 'true'
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
       - name: Build
@@ -58,7 +60,7 @@ jobs:
   linux:
     needs: changes
     if: needs.changes.outputs.linux == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - run: sh linux/tests/run-docker.sh
@@ -70,7 +72,7 @@ jobs:
   macos:
     needs: changes
     if: needs.changes.outputs.macos == 'true'
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - run: ./macos/build.sh

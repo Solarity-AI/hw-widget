@@ -68,29 +68,42 @@ namespace HwWidget
         // name pointer (padded to 8), CStatus at 8, the double at 16.
         public static Dictionary<string, double> ReadArray(IntPtr counter, uint format)
         {
-            Dictionary<string, double> res = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
-            if (counter == IntPtr.Zero) return res;
+            Dictionary<string, double> res;
+            TryReadArray(counter, format, out res);
+            return res;
+        }
+
+        // False when PDH gave no data, so a caller can show "unknown" instead of 0. The instance list can grow
+        // between the size query and the read (a new GPU engine instance), which returns MORE_DATA again:
+        // retry with the new size instead of giving up.
+        public static bool TryReadArray(IntPtr counter, uint format, out Dictionary<string, double> res)
+        {
+            res = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+            if (counter == IntPtr.Zero) return false;
             uint size = 0, count;
             int st = PdhGetFormattedCounterArrayW(counter, format, ref size, out count, IntPtr.Zero);
-            if (st != MORE_DATA || size == 0) return res;
-            IntPtr buf = Marshal.AllocHGlobal((int)size);
-            try
+            for (int attempt = 0; attempt < 3 && st == MORE_DATA && size > 0; attempt++)
             {
-                st = PdhGetFormattedCounterArrayW(counter, format, ref size, out count, buf);
-                if (st != 0) return res;
-                for (int i = 0; i < count; i++)
+                IntPtr buf = Marshal.AllocHGlobal((int)size);
+                try
                 {
-                    IntPtr item = new IntPtr(buf.ToInt64() + (long)i * 24);
-                    uint cs = (uint)Marshal.ReadInt32(item, 8);
-                    if (cs != 0 && cs != 1) continue;
-                    double v = BitConverter.Int64BitsToDouble(Marshal.ReadInt64(item, 16));
-                    string name = Marshal.PtrToStringUni(Marshal.ReadIntPtr(item)) ?? "";
-                    double prev;
-                    res[name] = res.TryGetValue(name, out prev) ? prev + v : v;
+                    st = PdhGetFormattedCounterArrayW(counter, format, ref size, out count, buf);
+                    if (st != 0) continue;
+                    for (int i = 0; i < count; i++)
+                    {
+                        IntPtr item = new IntPtr(buf.ToInt64() + (long)i * 24);
+                        uint cs = (uint)Marshal.ReadInt32(item, 8);
+                        if (cs != 0 && cs != 1) continue;
+                        double v = BitConverter.Int64BitsToDouble(Marshal.ReadInt64(item, 16));
+                        string name = Marshal.PtrToStringUni(Marshal.ReadIntPtr(item)) ?? "";
+                        double prev;
+                        res[name] = res.TryGetValue(name, out prev) ? prev + v : v;
+                    }
+                    return true;
                 }
+                finally { Marshal.FreeHGlobal(buf); }
             }
-            finally { Marshal.FreeHGlobal(buf); }
-            return res;
+            return false;
         }
     }
 
@@ -396,7 +409,9 @@ namespace HwWidget
             if ((DateTime.UtcNow - adaptersAt).TotalMinutes > 5) RefreshAdapters();
             // Sum each engine over all processes, then take the busiest engine per adapter (what Task Manager shows).
             Dictionary<string, double> engines = new Dictionary<string, double>();
-            foreach (KeyValuePair<string, double> kv in Pdh.ReadArray(cGpu, Pdh.FMT_DOUBLE | Pdh.FMT_NOCAP100))
+            Dictionary<string, double> gpuRaw;
+            bool gpuRead = Pdh.TryReadArray(cGpu, Pdh.FMT_DOUBLE | Pdh.FMT_NOCAP100, out gpuRaw);
+            foreach (KeyValuePair<string, double> kv in gpuRaw)
             {
                 string luid = LuidOf(kv.Key);
                 int e = kv.Key.IndexOf("_eng_", StringComparison.OrdinalIgnoreCase);
@@ -434,7 +449,7 @@ namespace HwWidget
                     g.Name = a.Name; g.Luid = a.Luid; g.Integrated = a.Integrated;
                     double p;
                     if (perAdapter.TryGetValue(a.Luid, out p)) g.Percent = Math.Max(0, Math.Min(100, p));
-                    else if (cGpu != IntPtr.Zero) g.Percent = 0;
+                    else if (gpuRead) g.Percent = 0;   // read fine and this adapter is idle; a failed read stays unknown
                     double m;
                     if (mem.TryGetValue(a.Luid, out m)) g.MemUsedGB = m / (1024.0 * 1024 * 1024);
                     for (int b = 0; b < 64; b += 4) Marshal.WriteInt32(perf, b, 0);
