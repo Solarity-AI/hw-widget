@@ -286,7 +286,7 @@ namespace HwWidget
             string e = System.Security.SecurityElement.Escape(exe);
             return "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\r\n" +
 "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\r\n" +
-"  <RegistrationInfo><Description>Reads the CPU temperature for HW Widget (admin-only sensors). Remove with the widget's menu or windows\\uninstall.ps1.</Description></RegistrationInfo>\r\n" +
+"  <RegistrationInfo><Description>Reads the CPU temperature for HW Widget (admin-only sensors). Remove with the widget's menu or Uninstall HW Widget (Windows).cmd.</Description></RegistrationInfo>\r\n" +
 "  <Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>\r\n" +
 "  <Principals><Principal id=\"Author\"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>\r\n" +
 "  <Settings>\r\n" +

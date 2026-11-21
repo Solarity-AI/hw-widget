@@ -46,7 +46,10 @@ Get the code first: [download the latest release](https://github.com/Solarity-AI
 
 Double-click `Install HW Widget (Windows).cmd`.
 
-It compiles the widget with the C# compiler built into Windows (no SDK, no downloads, no admin rights), runs its self-test, adds it to startup and launches it.
+It compiles the widget with the C# compiler built into Windows straight into `%LOCALAPPDATA%\HWWidget` (no SDK, no PowerShell, no downloads, no admin rights). The widget then runs its self-test, adds a shortcut to your Startup folder and starts.
+Updating is the same: run the installer again.
+
+Antivirus: older versions installed through a PowerShell script, a registry Run key and an automatic admin step, which Bitdefender's Advanced Threat Defense flagged as a dropper. The installer no longer does any of that, but the exe is still unsigned and built on your PC, so an antivirus can still block it. If yours does, add an exception for the repository folder and `%LOCALAPPDATA%\HWWidget`.
 The pill sits on the taskbar left of the tray. Hover for the details card, click to pin it, right-click for settings.
 
 Sensors: Windows performance counters for CPU, memory and disk; the `GPU Engine` counters for GPU load, as Task Manager computes it; the graphics kernel (D3DKMT) for GPU names and temperature, with NVIDIA NVML as a fallback; ACPI thermal zones for the CPU temperature; and [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) or OpenHardwareMonitor when one is running.
@@ -56,10 +59,10 @@ It uses under 1 % of 1 core and about 35 MB of memory, and hides itself while a 
 
 Some laptops, for example Intel Core Ultra (Lunar Lake) machines, show a dash for TEMP. Their only ACPI zone is a fixed placeholder, and the real sensors (Intel Dynamic Tuning, `root\wmi:EsifDeviceInformation`) can only be read by an admin.
 
-To fix it, right-click the pill and choose **Enable CPU temperature (admin)**. You can also run this from the repository folder:
+To fix it, right-click the pill and choose **Enable CPU temperature (admin)**. You can also run this in a terminal in the repository folder:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File windows\install.ps1 -EnableCpuTemp
+& '.\Install HW Widget (Windows).cmd' --cpu-temp
 ```
 
 After 1 UAC prompt, this does 3 things:
@@ -70,7 +73,8 @@ After 1 UAC prompt, this does 3 things:
 
 The widget itself still runs without admin rights. It ignores readings older than 15 seconds.
 
-Turn the helper off from the same menu, which then reads **Remove CPU temperature helper (admin)**. `uninstall.ps1` also removes it.
+Turn the helper off from the same menu, which then reads **Remove CPU temperature helper (admin)**. `Uninstall HW Widget (Windows).cmd` also removes it.
+Reinstalling the widget doesn't update an installed helper: remove it and enable it again from the menu to get the new version.
 
 ### Linux (GNOME Shell 42–49)
 
@@ -102,7 +106,7 @@ Each command removes the widget, its startup entry and its settings. Run it from
 
 | Platform | Command |
 | --- | --- |
-| Windows | `powershell -ExecutionPolicy Bypass -File windows\uninstall.ps1` (1 admin prompt only if the CPU temperature helper is installed) |
+| Windows | Double-click `Uninstall HW Widget (Windows).cmd` (1 admin prompt only if the CPU temperature helper is installed) |
 | Linux | `sh linux/uninstall.sh` |
 | macOS | `./macos/uninstall.sh` |
 
@@ -120,8 +124,8 @@ Each command removes the widget, its startup entry and its settings. Run it from
 
 | Platform | Command | What it checks |
 | --- | --- | --- |
-| Windows | `windows\build.ps1`, then `windows\bin\HWWidget.exe --selftest out.txt` | 45 sensor, helper, layout, formatting, full-screen and accessibility checks |
-| Windows | `windows\tests\scripts-test.ps1` | 5 install, uninstall and build script checks (self-test gate, honest uninstall message, folder names with brackets) |
+| Windows | `windows\build.cmd`, then `windows\bin\HWWidget.exe --selftest out.txt` | 48 sensor, helper, install, layout, formatting, full-screen and accessibility checks |
+| Windows | `windows\tests\scripts-test.ps1` | 8 build, install and uninstall checks (folder names with brackets, spaces, parentheses and `&`; a fresh self-test report; the Startup shortcut) |
 | Windows | `HWWidget.exe --render <dir>` / `--probe <secs> <csv>` | PNG renders of every state / live sensor log |
 | Linux | `sh linux/tests/run-docker.sh` | 80 parser, sensor-tree, nvidia-smi and model checks, 15 GNOME 42 module checks and 16 install and uninstall checks, in Docker on Debian trixie (GNOME 45+) and Ubuntu 22.04 (GNOME 42), plus PNG renders in `linux/tests/out` |
 | macOS | `sh macos/tests/run-docker.sh` | 54 model, parser and settings checks of the shared core, on Linux in Docker |
