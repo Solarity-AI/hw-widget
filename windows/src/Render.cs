@@ -325,7 +325,8 @@ namespace HwWidget
                     if (hover) using (SolidBrush hb = new SolidBrush(p.Dark ? Color.FromArgb(18, 255, 255, 255) : Color.FromArgb(10, 30, 41, 59))) g.FillPath(hb, path);
 
                     // soft inner tint of each cell's accent colour, stronger when warm/critical
-                    Region old = g.Clip;
+                    // A fresh Graphics has no clip, so ResetClip restores it; reading g.Clip would allocate a
+                    // GDI+ Region on every paint that only the finalizer frees.
                     g.SetClip(path);
                     for (int i = 0; i < cells.Length; i++)
                     {
@@ -336,7 +337,7 @@ namespace HwWidget
                         using (LinearGradientBrush tb = new LinearGradientBrush(new RectangleF(cr.X, -1, cr.Width, H + 2), Alpha(tint, 0), Alpha(tint, a), 90f))
                             g.FillRectangle(tb, cr);
                     }
-                    g.Clip = old;
+                    g.ResetClip();
 
                     // glossy top highlight
                     using (Pen hl = new Pen(p.Dark ? Color.FromArgb(28, 255, 255, 255) : Color.FromArgb(180, 255, 255, 255), 1f))
