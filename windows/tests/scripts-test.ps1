@@ -29,5 +29,26 @@ foreach ($name in @("hwwidget-[1]-$PID", "hw widget-main (1) & co-$PID")) {
     }
     Remove-Item -LiteralPath $box -Recurse -Force -ErrorAction SilentlyContinue
 }
+# The installer notices a window that runs inside an app's private file copy (MSIX virtualization), where an
+# install is invisible at sign-in and dies with the app, and installs through Task Scheduler instead.
+$installer = Join-Path (Split-Path $win) 'Install HW Widget (Windows).cmd'
+$fake = Join-Path ([IO.Path]::GetTempPath()) "hwwidget-appdata-$PID"
+[IO.Directory]::CreateDirectory((Join-Path $fake 'Packages\Some.App_x\LocalCache\Local')) | Out-Null
+$realAppData = $env:LOCALAPPDATA
+try {
+    $env:LOCALAPPDATA = $fake
+    $out = & cmd /c "`"$installer`" --check-sandbox" 2>&1 | Out-String
+    Check 'installer: a plain window is not sandboxed' (($LASTEXITCODE -eq 1) -and ($out.Trim() -eq 'not sandboxed'))
+    # Inside the app, the probe the installer writes to %LOCALAPPDATA% shows up in the package's LocalCache too.
+    Set-Content -LiteralPath (Join-Path $fake 'Packages\Some.App_x\LocalCache\Local\HWWidget-sandbox-probe.tmp') 'x'
+    $out = & cmd /c "`"$installer`" --check-sandbox" 2>&1 | Out-String
+    Check 'installer: a window inside an app package is sandboxed' (($LASTEXITCODE -eq 0) -and ($out.Trim() -eq 'sandboxed'))
+    Check 'installer: the sandbox probe is cleaned up' (-not (Test-Path -LiteralPath (Join-Path $fake 'HWWidget-sandbox-probe.tmp')))
+} finally { $env:LOCALAPPDATA = $realAppData; Remove-Item -LiteralPath $fake -Recurse -Force -ErrorAction SilentlyContinue }
+$text = [IO.File]::ReadAllText($installer)
+Check 'installer: builds before it stops the running widget' ($text.IndexOf('build.cmd" "%NEW%"') -gt 0 -and $text.IndexOf('build.cmd" "%NEW%"') -lt $text.IndexOf('taskkill'))
+Check 'installer: a failed swap restarts the installed widget' ($text -match ':swapfail[\s\S]*?start "" "%EXE%"')
+Check 'installer: a sandboxed window installs through Task Scheduler' ($text -match 'goto outside' -and $text -match 'schtasks /Create')
+
 Write-Host "$fails failed"
 exit $fails
