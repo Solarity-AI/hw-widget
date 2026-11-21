@@ -2,7 +2,7 @@
 // pure sensor helpers and the self-test. Foundation only, so it also builds and tests on Linux (swift:6.0 Docker).
 import Foundation
 
-let appVersion = "1.0.0"
+let appVersion = "1.1.0"
 let dash = "\u{2014}"
 
 // MARK: - Colours
@@ -105,6 +105,15 @@ enum Fmt {
         return (v < 10 && i > 0 ? String(format: "%.1f", v) : "\(Int(v.rounded()))") + " " + units[i]
     }
 
+    /// The pill's 4-character rate: 0K, 999K, 1.0M, 9.9M, 10M, 999M, 1.0G (1024-based, per second).
+    static func rateShort(_ bps: Double) -> String {
+        guard bps.isFinite else { return dash }
+        let units = ["K", "M", "G"]
+        var v = max(0, bps) / 1024, i = 0
+        while v >= 999.5 && i < units.count - 1 { v /= 1024; i += 1 }
+        return (i > 0 && v < 9.95 ? String(format: "%.1f", v) : "\(Int(v.rounded()))") + units[i]
+    }
+
     static func gb(_ g: Double) -> String {
         guard g.isFinite else { return dash }
         return (g < 10 ? String(format: "%.1f", g) : "\(Int(g.rounded()))") + " GB"
@@ -131,8 +140,17 @@ enum Fourth: String, CaseIterable { case auto, gpu, disk }
 struct Cell {
     var label: String, value: String, frac: Double
     var bar1: RGB, bar2: RGB, labelColor: RGB, valueColor: RGB, level: Int
+    var spoken: String? = nil   // what VoiceOver says instead of value, when set
     var unknown: Bool { value == dash }
 }
+
+/// What VoiceOver announces for the pill: "TEMP 61°, CPU 23%, RAM 58%, DISK unknown, DOWN 1.2 MB/s".
+func accessibleText(_ cells: [Cell]) -> String {
+    cells.map { "\($0.label) \($0.unknown ? "unknown" : ($0.spoken ?? $0.value))" }.joined(separator: ", ")
+}
+
+/// Download rate on a log scale up to 1 Gbit/s.
+func netFrac(_ bps: Double) -> Double { bps.isFinite ? log10(1 + max(0, bps)) / log10(1 + 125e6) : .nan }
 
 private func labelTint(_ accent: RGB, _ p: Palette) -> RGB { p.dark ? accent.lighten(0.2) : accent.darken(0.22) }
 private func barTone(_ c: RGB, _ p: Palette) -> RGB { p.dark ? c : c.darken(0.1) }
@@ -153,7 +171,7 @@ private func metric(_ label: String, _ v: Double, _ th: (Double, Double), _ c: (
                 labelColor: labelTint(c.0.mix(c.1, 0.4), p), valueColor: valueColor(lvl, p), level: lvl)
 }
 
-func buildCells(_ s: Snapshot, fahrenheit: Bool = false, fourth: Fourth = .auto, palette p: Palette = .darkTheme) -> [Cell] {
+func buildCells(_ s: Snapshot, fahrenheit: Bool = false, fourth: Fourth = .auto, download: Bool = false, palette p: Palette = .darkTheme) -> [Cell] {
     var tc = s.cpuTempC, label = "TEMP"
     if !tc.isFinite && s.gpuTempC.isFinite { tc = s.gpuTempC; label = "GPU\u{00B0}" }
     let tcol = tempColor(tc), tl = level(tc, Thresholds.temp)
@@ -174,6 +192,13 @@ func buildCells(_ s: Snapshot, fahrenheit: Bool = false, fourth: Fourth = .auto,
     cells.append(metric("RAM", s.ramPercent, Thresholds.ram, Colors.ram, p))
     cells.append(showsGpu(s, fourth) ? metric("GPU", s.gpuPercent, Thresholds.gpu, Colors.gpu, p)
                                      : metric("DISK", s.diskPercent, Thresholds.disk, Colors.disk, p))
+    if download {
+        // Never amber or red: a fast download is good news.
+        let (a, b) = Colors.net
+        cells.append(Cell(label: "DOWN", value: Fmt.rateShort(s.netDownBps), frac: netFrac(s.netDownBps),
+                          bar1: barTone(a, p), bar2: barTone(b, p), labelColor: labelTint(a.mix(b, 0.4), p), valueColor: p.text,
+                          level: 0, spoken: Fmt.rate(s.netDownBps)))
+    }
     return cells
 }
 
@@ -213,7 +238,7 @@ func cardRows(_ s: Snapshot, fahrenheit: Bool = false, palette p: Palette = .dar
     rows.append(heat(CardRow(title: "Disk", sub: "Busiest drive, active time", value: Fmt.pct(s.diskPercent), frac: s.diskPercent / 100,
                         a: Colors.disk.0, b: Colors.disk.1, valueColor: valueColor(level(s.diskPercent, Thresholds.disk), p)), level(s.diskPercent, Thresholds.disk)))
     rows.append(CardRow(title: "Network", sub: "\u{2191} \(Fmt.rate(s.netUpBps)) upload", value: "\u{2193} \(Fmt.rate(s.netDownBps))",
-                        frac: s.netDownBps.isFinite ? log10(1 + s.netDownBps) / log10(1 + 125e6) : .nan,
+                        frac: netFrac(s.netDownBps),
                         a: Colors.net.0, b: Colors.net.1, valueColor: p.text))
     return rows
 }
@@ -309,6 +334,7 @@ struct Settings: Codable {
     var interval: Double = 2
     var fahrenheit = defaultFahrenheit
     var fourth = Fourth.auto.rawValue
+    var download = true
 
     /// Out-of-range values fall back to their defaults.
     func validated() -> Settings {
@@ -327,6 +353,7 @@ extension Settings {
         interval = (try? c.decodeIfPresent(Double.self, forKey: .interval)) ?? interval
         fahrenheit = (try? c.decodeIfPresent(Bool.self, forKey: .fahrenheit)) ?? fahrenheit
         fourth = (try? c.decodeIfPresent(String.self, forKey: .fourth)) ?? fourth
+        download = (try? c.decodeIfPresent(Bool.self, forKey: .download)) ?? download
     }
 }
 
@@ -349,7 +376,11 @@ func coreSelfTest() -> (passed: Int, failed: Int) {
     check("TC-139 cpu: tick wrap gives 5 %", abs(cpuPercent([100_000, 50_000, 4_294_964_266, 0], [100_080, 50_080, 10, 0]) - 5) < 0.01)
     // TC-141: a settings file without a key keeps the other settings.
     let partial = try? JSONDecoder().decode(Settings.self, from: Data(#"{"interval":5,"fahrenheit":true}"#.utf8))
-    check("TC-141 settings: missing key keeps the others", partial?.interval == 5 && partial?.fahrenheit == true && partial?.fourth == "auto")
+    check("TC-141 settings: missing key keeps the others", partial?.interval == 5 && partial?.fahrenheit == true && partial?.fourth == "auto" && partial?.download == true)
+    let off = try? JSONDecoder().decode(Settings.self, from: Data(#"{"download":false}"#.utf8))
+    check("settings: download speed can be turned off", off?.download == false && off?.interval == 2)
+    let wrong = try? JSONDecoder().decode(Settings.self, from: Data(#"{"download":"no","interval":5}"#.utf8))
+    check("settings: invalid download value keeps it on", wrong?.download == true && wrong?.interval == 5)
     let bad = try? JSONDecoder().decode(Settings.self, from: Data(#"{"interval":7,"fourth":"cpu"}"#.utf8))
     check("TC-141 settings: invalid values fall back", bad?.validated().interval == 2 && bad?.validated().fourth == "auto")
     check("fmt: pct clamps", Fmt.pct(104) == "100%" && Fmt.pct(-3) == "0%")
@@ -398,6 +429,18 @@ func coreSelfTest() -> (passed: Int, failed: Int) {
     cells = buildCells(therm)
     check("cells: thermal state when no sensor", cells[0].value == "HOT" && cells[0].level == 1)
     check("cells: forced disk", buildCells(hot, fourth: .disk)[3].label == "DISK")
+    let K = 1024.0, MB = 1048576.0
+    check("rate short: K edges", Fmt.rateShort(0) == "0K" && Fmt.rateShort(999 * K) == "999K" && Fmt.rateShort(999.4 * K) == "999K")
+    check("rate short: K to M at 999.5 K", Fmt.rateShort(999.5 * K) == "1.0M" && Fmt.rateShort(1023 * K) == "1.0M" && Fmt.rateShort(1024 * K) == "1.0M")
+    check("rate short: one decimal below 9.95 M", Fmt.rateShort(9.94 * MB) == "9.9M" && Fmt.rateShort(9.96 * MB) == "10M" && Fmt.rateShort(999 * MB) == "999M")
+    check("rate short: G, negative and unknown", Fmt.rateShort(1000 * MB) == "1.0G" && Fmt.rateShort(-5) == "0K" && Fmt.rateShort(.nan) == dash)
+    var net = Snapshot(); net.cpuTempC = 61; net.cpuPercent = 23; net.ramPercent = 58; net.netDownBps = 182e3
+    let dc = buildCells(net, download: true)
+    check("cells: download cell is 5th, never amber or red", dc.count == 5 && dc[4].label == "DOWN" && dc[4].value == "178K" && dc[4].level == 0)
+    check("cells: download cell off by option", buildCells(net, download: false).count == 4)
+    net.netDownBps = 1_258_291
+    check("a11y: download cell speaks the full rate", accessibleText(buildCells(net, download: true)).hasSuffix(", DOWN 1.2 MB/s"))
+    check("a11y: unknown download rate", accessibleText(buildCells(Snapshot(), download: true)).hasSuffix(", DOWN unknown"))
     check("rows: temp, cpu, memory, 1 GPU, disk, network", cardRows(hot).map(\.title) == ["Temperature", "CPU", "Memory", "GPU", "Disk", "Network"])
     check("rows: critical GPU bar is amber to red", cardRows(hot)[3].a == Colors.warm && cardRows(hot)[3].b == Colors.hot)
     check("rows: thermal state shown as value", cardRows(therm)[0].value == "Serious")

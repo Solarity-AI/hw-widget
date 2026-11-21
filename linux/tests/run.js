@@ -136,7 +136,9 @@ check('net: removed interface and counter reset add nothing',
 check('settings: invalid values fall back to defaults',
     (s => s.fahrenheit === false && s.interval === 2 && s.fourth === 'auto')(M.normalizeSettings?.({fahrenheit: 'yes', interval: 3, fourth: 'cpu'}) || {}));
 check('settings: valid values kept',
-    (s => s.fahrenheit === true && s.interval === 5 && s.fourth === 'disk')(M.normalizeSettings?.({fahrenheit: true, interval: 5, fourth: 'disk'}) || {}));
+    (s => s.fahrenheit === true && s.interval === 5 && s.fourth === 'disk' && s.download === false)(M.normalizeSettings?.({fahrenheit: true, interval: 5, fourth: 'disk', download: false}) || {}));
+check('settings: download speed shown when the key is missing or invalid',
+    M.normalizeSettings({}).download === true && M.normalizeSettings({download: 'no'}).download === true && M.normalizeSettings(null).download === true);
 // QA: the pill had no accessible name, so screen readers announced nothing.
 check('a11y: pill reads as text', M.accessibleText?.(M.buildCells({...M.emptySnapshot(), cpuTempC: 61, cpuPercent: 23, ramPercent: 58})) ===
     'TEMP 61°, CPU 23%, RAM 58%, DISK unknown', M.accessibleText?.(M.buildCells({...M.emptySnapshot(), cpuTempC: 61, cpuPercent: 23, ramPercent: 58})));
@@ -283,6 +285,19 @@ check('cells: no GPU -> DISK, unknown values are dashes', cells[3].label === 'DI
 check('cells: GPU temperature fallback is labelled', M.buildCells({...M.emptySnapshot(), gpuTempC: 50})[0].label === 'GPU°');
 check('fmt: 20 C -> 68 F', M.fmt.temp(20, true) === '68°');
 check('fmt: rate', M.fmt.rate(1536) === '1.5 KB/s' && M.fmt.rate(48e6) === '46 MB/s');
+{
+    const rs = M.fmt.rateShort, K = 1024, MB = 1048576;
+    check('rate short: K edges', rs(0) === '0K' && rs(999 * K) === '999K' && rs(999.4 * K) === '999K', rs(999.4 * K));
+    check('rate short: K to M at 999.5 K', rs(999.5 * K) === '1.0M' && rs(1023 * K) === '1.0M' && rs(1024 * K) === '1.0M', rs(999.5 * K));
+    check('rate short: one decimal below 9.95 M', rs(9.94 * MB) === '9.9M' && rs(9.96 * MB) === '10M' && rs(999 * MB) === '999M', rs(9.96 * MB));
+    check('rate short: G, negative and unknown', rs(1000 * MB) === '1.0G' && rs(-5) === '0K' && rs(NaN) === M.DASH);
+    const dc = M.buildCells({...M.emptySnapshot(), cpuTempC: 61, netDownBps: 182e3}, {download: true});
+    check('cells: download cell is 5th, never amber or red', dc.length === 5 && dc[4].label === 'DOWN' && dc[4].value === '178K' && dc[4].level === 0, dc[4]?.value);
+    check('cells: download cell off by option', M.buildCells(M.emptySnapshot(), {download: false}).length === 4);
+    check('a11y: download cell speaks the full rate',
+        M.accessibleText(M.buildCells({...M.emptySnapshot(), netDownBps: 1258291}, {download: true})).endsWith(', DOWN 1.2 MB/s'));
+    check('a11y: unknown download rate', M.accessibleText(M.buildCells(M.emptySnapshot(), {download: true})).endsWith(', DOWN unknown'));
+}
 
 // ---------------------------------------------------------------- render PNGs with the real drawing code
 const out = ARGV[0] || GLib.get_tmp_dir();
@@ -290,10 +305,10 @@ GLib.mkdir_with_parents(out, 0o755);
 const normal = {...M.emptySnapshot(), cpuName: 'AMD Ryzen 7 7840U w/ Radeon 780M Graphics', cpuTempC: 61, cpuTempSource: 'k10temp Tctl',
     cpuPercent: 23, ramPercent: 58, ramUsedGB: 18.6, ramTotalGB: 31.8, diskPercent: 4, netDownBps: 182e3, netUpBps: 21e3,
     gpus: [{name: 'NVIDIA GeForce RTX 4070', percent: 12, tempC: 51, memUsedGB: 1.2}], gpuPercent: 12, gpuTempC: 51};
-const cases = {normal, hot: {...normal, ...hot, gpus: hot.gpus}, unknown: M.emptySnapshot()};
+const cases = {normal, hot: {...normal, ...hot, gpus: hot.gpus, netDownBps: 48e6}, unknown: M.emptySnapshot()};
 for (const [name, snap] of Object.entries(cases)) {
     for (const scale of [1, 2]) {
-        const cl = M.buildCells(snap);
+        const cl = M.buildCells(snap, {download: true});
         const sz = R.pillSize(cl.length, scale);
         const surf = new Cairo.ImageSurface(Cairo.Format.ARGB32, sz.w + 40 * scale, Math.ceil(40 * scale));
         const cr = new Cairo.Context(surf);
