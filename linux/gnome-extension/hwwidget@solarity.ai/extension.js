@@ -106,8 +106,19 @@ class HwIndicator extends PanelMenu.Button {
         return this._themeCtx.scale_factor || 1;
     }
 
+    // Built once per sample or settings change: sizing, painting and the accessible name all use it.
     _cells() {
-        return buildCells(this._snap, {fahrenheit: this._settings.fahrenheit, fourth: this._settings.fourth, download: this._settings.download, palette: PALETTES.dark});
+        const o = this._settings, c = this._cellCache;
+        if (c && c.snap === this._snap && c.fahrenheit === o.fahrenheit && c.fourth === o.fourth && c.download === o.download)
+            return c.cells;
+        const cells = buildCells(this._snap, {fahrenheit: o.fahrenheit, fourth: o.fourth, download: o.download, palette: PALETTES.dark});
+        this._cellCache = {snap: this._snap, fahrenheit: o.fahrenheit, fourth: o.fourth, download: o.download, cells};
+        return cells;
+    }
+
+    // Resizing an actor queues a relayout of the panel, so only do it when the size really changes.
+    _setSize(actor, w, h) {
+        if (actor.width !== w || actor.height !== h) actor.set_size(w, h);
     }
 
     _pillScale() {
@@ -119,9 +130,9 @@ class HwIndicator extends PanelMenu.Button {
     _resize() {
         const sc = this._pillScale();
         const ps = pillSize(this._cells().length, sc);
-        this._pill.set_size(ps.w, ps.h);
+        this._setSize(this._pill, ps.w, ps.h);
         const cs = cardSize(cardRows(this._snap).length);
-        this._card.set_size(Math.ceil(cs.w * this._sf), Math.ceil(cs.h * this._sf));
+        this._setSize(this._card, Math.ceil(cs.w * this._sf), Math.ceil(cs.h * this._sf));
     }
 
     _paintPill(area) {
