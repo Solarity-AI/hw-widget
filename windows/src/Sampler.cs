@@ -225,13 +225,17 @@ namespace HwWidget
 
         IntPtr query, cCpu, cGpu, cGpuMem, cZone, cDisk, cRx, cTx;
         readonly string cpuName;
+        // Ages come from a monotonic clock: a wall-clock step back (time sync, manual change) can't freeze a re-read.
+        static readonly System.Diagnostics.Stopwatch Mono = System.Diagnostics.Stopwatch.StartNew();
+        static long NowMs() { return Mono.ElapsedMilliseconds; }
+        const long LongAgo = -3600000;   // "never": an hour before the clock started
         List<Adapter> adapters = new List<Adapter>();
-        DateTime adaptersAt = DateTime.MinValue;
+        long adaptersAt = LongAgo;
         readonly HashSet<string> ghostLuids = new HashSet<string>();
-        Nvml nvml; bool nvmlTried;
+        Nvml nvml; int nvmlFails; long nvmlRetryAt = LongAgo;
         readonly Dictionary<string, double[]> zoneHist = new Dictionary<string, double[]>(); // min, max, firstSeenTicks
         readonly HashSet<string> deadZones = new HashSet<string>();
-        object lhm; DateTime lhmCheckAt = DateTime.MinValue, lhmReadAt = DateTime.MinValue; double lhmTemp = double.NaN; string lhmName = "";
+        object lhm; long lhmCheckAt = LongAgo, lhmReadAt = LongAgo; double lhmTemp = double.NaN; string lhmName = "";
         bool disposed;
 
         public HwSampler()
@@ -337,7 +341,9 @@ namespace HwWidget
             foreach (KeyValuePair<string, double> kv in d)
             {
                 string n = kv.Key.ToLowerInvariant();
-                if (n.Contains("vethernet") || n.Contains("hyper-v") || n.Contains("loopback") || n.Contains("isatap") ||
+                // A VM's own "Microsoft Hyper-V Network Adapter" (Azure, Windows Sandbox) carries its traffic and counts;
+                // the host's "Hyper-V Virtual Ethernet Adapter" repeats the physical adapter's traffic and stays out as virtual.
+                if (n.Contains("vethernet") || n.Contains("loopback") || n.Contains("isatap") ||
                     n.Contains("teredo") || n.Contains("miniport") || n.Contains("virtual") || n.Contains("vpn") || n.Contains("wsl") ||
                     // VPN tunnels (Tailscale, WireGuard, OpenVPN TAP, Wintun): their traffic also crosses the physical adapter.
                     n.Contains("tunnel") || n.Contains("tap-") || n.Contains("wintun") || n.Contains("wireguard") || n.Contains("tailscale")) continue;
@@ -350,7 +356,7 @@ namespace HwWidget
         void RefreshAdapters()
         {
             CloseAdapters();
-            adaptersAt = DateTime.UtcNow;
+            adaptersAt = NowMs();
             Kmt.ENUMADAPTERS2 e = new Kmt.ENUMADAPTERS2();
             if (Kmt.D3DKMTEnumAdapters2(ref e) != 0 || e.NumAdapters == 0) return;
             int itemSize = Marshal.SizeOf(typeof(Kmt.ADAPTERINFO));
@@ -411,9 +417,29 @@ namespace HwWidget
         // adapter it doesn't know (a driver update or reset gives the GPU a new LUID).
         internal static bool AdaptersStale(TimeSpan age, bool empty, bool unknownLuid)
         {
-            if (age.TotalMinutes > 5) return true;
+            if (age < TimeSpan.Zero || age.TotalMinutes > 5) return true;   // a negative age: the clock went back
             return (empty || unknownLuid) && age.TotalSeconds > 10;
         }
+
+        // Due after periodMs, and at once when the clock went back.
+        internal static bool Due(long nowMs, long lastMs, long periodMs) { return nowMs < lastMs || nowMs - lastMs >= periodMs; }
+
+        internal static bool IsNvidia(string name)
+        {
+            string un = (name ?? "").ToUpperInvariant();
+            return un.Contains("NVIDIA") || un.Contains("QUADRO") || un.Contains("GEFORCE") || un.Contains("TESLA") || un.Contains("RTX");
+        }
+
+        // NVML reads device 0, which stands for a given GPU only when it is the one NVIDIA GPU.
+        internal static bool NvmlFits(IEnumerable<string> gpuNames)
+        {
+            int n = 0;
+            foreach (string g in gpuNames) if (IsNvidia(g)) n++;
+            return n == 1;
+        }
+
+        // A failed NVML open is tried again after 10 s, 20 s, 40 s ... up to every 10 minutes.
+        internal static long NvmlRetryMs(int failures) { return Math.Min(600000L, 10000L << Math.Min(Math.Max(failures, 1) - 1, 6)); }
 
         bool KnownAdapter(string luid) { foreach (Adapter a in adapters) if (a.Luid == luid) return true; return false; }
 
@@ -444,7 +470,7 @@ namespace HwWidget
             // until the 5-minute re-read, so it can't trigger a re-read every 10 s.
             bool unknown = false;
             foreach (string l in perAdapter.Keys) if (!ghostLuids.Contains(l) && !KnownAdapter(l)) unknown = true;
-            if (AdaptersStale(DateTime.UtcNow - adaptersAt, adapters.Count == 0, unknown))
+            if (AdaptersStale(TimeSpan.FromMilliseconds(NowMs() - adaptersAt), adapters.Count == 0, unknown))
             {
                 RefreshAdapters();
                 ghostLuids.Clear();
@@ -480,16 +506,25 @@ namespace HwWidget
                         int deci = Marshal.ReadInt32(perf, 56);       // D3DKMT_ADAPTER_PERFDATA.Temperature, deci-deg C
                         if (deci > 50 && deci < 1300) g.TempC = deci / 10.0;
                     }
-                    string un = g.Name.ToUpperInvariant();
-                    if (double.IsNaN(g.TempC) && (un.Contains("NVIDIA") || un.Contains("QUADRO") || un.Contains("GEFORCE") || un.Contains("TESLA") || un.Contains("RTX")))
-                    {
-                        if (!nvmlTried) { nvmlTried = true; nvml = Nvml.TryOpen(); }
-                        if (nvml != null) g.TempC = nvml.TempC();
-                    }
                     list.Add(g);
                 }
             }
             finally { Marshal.FreeHGlobal(perf); }
+
+            // The NVML temperature (device 0) only with exactly 1 NVIDIA GPU; a failed open is tried again with back-off.
+            List<string> names = new List<string>();
+            foreach (GpuInfo g in list) names.Add(g.Name);
+            if (NvmlFits(names))
+                foreach (GpuInfo g in list)
+                    if (double.IsNaN(g.TempC) && IsNvidia(g.Name))
+                    {
+                        if (nvml == null && NowMs() >= nvmlRetryAt)
+                        {
+                            nvml = Nvml.TryOpen();
+                            if (nvml == null) nvmlRetryAt = NowMs() + NvmlRetryMs(++nvmlFails);
+                        }
+                        if (nvml != null) g.TempC = nvml.TempC();
+                    }
 
             s.Gpus = list.ToArray();
             GpuInfo busiest = null;
@@ -516,7 +551,7 @@ namespace HwWidget
                 double c = kv.Value / 10.0 - 273.15;   // tenths of Kelvin
                 zones[kv.Key] = c;
                 double[] h;
-                long now = DateTime.UtcNow.Ticks;
+                long now = NowMs() * TimeSpan.TicksPerMillisecond;
                 if (!zoneHist.TryGetValue(kv.Key, out h)) { h = new double[] { c, c, now }; zoneHist[kv.Key] = h; }
                 h[0] = Math.Min(h[0], c); h[1] = Math.Max(h[1], c);
                 // A zone that has not moved by 0.1 deg in 3 minutes is a dead placeholder, not a CPU sensor.
@@ -534,15 +569,15 @@ namespace HwWidget
 
         bool TryLhm(HwSnapshot s)
         {
-            DateTime now = DateTime.UtcNow;
+            long now = NowMs();
             if (lhm == null)
             {
-                if ((now - lhmCheckAt).TotalSeconds < 60) return false;
+                if (!Due(now, lhmCheckAt, 60000)) return false;
                 lhmCheckAt = now;
                 lhm = LhmReader.Open();
                 if (lhm == null) return false;
             }
-            if ((now - lhmReadAt).TotalSeconds >= 3)
+            if (Due(now, lhmReadAt, 3000))
             {
                 lhmReadAt = now;
                 string name;

@@ -85,6 +85,26 @@ namespace HwWidget
             return 0;
         }
 
+        // WCAG 2 contrast: relative luminance of opaque colours, and the lowest ratio of any text colour on any background.
+        static double Luminance(Color c)
+        {
+            double[] ch = { c.R / 255.0, c.G / 255.0, c.B / 255.0 };
+            for (int i = 0; i < 3; i++) ch[i] = ch[i] <= 0.03928 ? ch[i] / 12.92 : Math.Pow((ch[i] + 0.055) / 1.055, 2.4);
+            return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+        }
+
+        static double MinContrast(IEnumerable<Color> texts, Color[] backgrounds)
+        {
+            double min = double.MaxValue;
+            foreach (Color t in texts)
+                foreach (Color b in backgrounds)
+                {
+                    double x = Luminance(t), y = Luminance(b);
+                    min = Math.Min(min, (Math.Max(x, y) + 0.05) / (Math.Min(x, y) + 0.05));
+                }
+            return Math.Floor(min * 100) / 100;
+        }
+
         static string D(double v) { return double.IsNaN(v) ? "" : v.ToString("0.##", CultureInfo.InvariantCulture); }
         internal static string Unit(double v, string unit) { return double.IsNaN(v) ? Fmt.Dash : D(v) + unit; }
         static string Q(string s) { return "\"" + (s ?? "").Replace("\"", "'") + "\""; }
@@ -260,6 +280,156 @@ namespace HwWidget
             check("pill: 192x34 DIP -> 240x43 px at 125%", ps.Width == 240 && ps.Height == 43);
             ps = Painter.PillSize(5, 1.25f);
             check("pill: 5 cells 236x34 DIP -> 295x43 px at 125%", ps.Width == 295 && ps.Height == 43);
+
+            // TC-223 (QA-19): the card tells a screen reader its rows, not only "HW Widget details".
+            string cardSaid = Painter.CardAccessibleText(Fake("normal"), false);
+            check("TC-223 a11y: the card reads its rows", cardSaid.StartsWith("Temperature 61°C (CPU, ACPI thermal zone CPUZ), CPU 23%") && cardSaid.Contains("Memory 58% (19 of 32 GB in use)") &&
+                cardSaid.Contains("GPU 12% (51°C, 1.2 GB VRAM, Quadro RTX 4000 Max-Q)") && cardSaid.Contains("Disk 4%") && cardSaid.EndsWith("Network 178 KB/s download (21 KB/s upload)"));
+            cardSaid = Painter.CardAccessibleText(Fake("unknown"), false);
+            check("TC-223 a11y: unknown card values are read as unknown", cardSaid.Contains("CPU unknown") && cardSaid.Contains("Memory unknown") && !cardSaid.Contains(Fmt.Dash));
+            // TC-232 (QA-13): a VM's own network adapters count; the host's Hyper-V switch adapter and other virtual adapters don't.
+            Dictionary<string, double> vmNet = new Dictionary<string, double>();
+            vmNet["Microsoft Hyper-V Network Adapter"] = 1000; vmNet["Microsoft Hyper-V Network Adapter _2"] = 200;
+            check("TC-232 net: a VM's Hyper-V network adapters count", HwSampler.SumNet(vmNet) == 1200);
+            Dictionary<string, double> hostNet = new Dictionary<string, double>();
+            hostNet["Intel[R] Ethernet Connection [16] I219-LM"] = 1000; hostNet["Hyper-V Virtual Ethernet Adapter"] = 1000; hostNet["Hyper-V Virtual Ethernet Adapter _2"] = 50;
+            hostNet["Hyper-V Virtual Switch Extension Adapter"] = 5; hostNet["VMware Virtual Ethernet Adapter for VMnet8"] = 30; hostNet["VirtualBox Host-Only Ethernet Adapter"] = 20;
+            hostNet["Microsoft Wi-Fi Direct Virtual Adapter _2"] = 10; hostNet["PANGP Virtual Ethernet Adapter"] = 400;
+            check("TC-232 net: the host's Hyper-V switch adapter and other virtual adapters stay out", HwSampler.SumNet(hostNet) == 1000);
+            // TC-235 (QA-20): fonts and string formats are made once, and a pill that would look the same is not drawn again.
+            Palette dp = Palette.For(true);
+            Cell[] frame = Painter.Cells(Fake("normal"), false, Fourth.Auto, true, dp);
+            using (Bitmap first1 = Painter.Pill(frame, dp, 1.25f, false)) { }
+            using (Bitmap first2 = Painter.Card(Fake("normal"), false, dp, 1.25f, false)) { }
+            int fontsBefore = Painter.FontsMade, formatsBefore = Painter.FormatsMade;
+            using (Bitmap next1 = Painter.Pill(frame, dp, 1.5f, true)) { }
+            using (Bitmap next2 = Painter.Card(Fake("hot"), true, Palette.For(false), 2f, true)) { }
+            check("TC-235 render: no new fonts or string formats after the first frame", Painter.FontsMade == fontsBefore && Painter.FormatsMade == formatsBefore);
+            string key = Painter.PillKey(frame, dp, 1.25f, false);
+            check("TC-235 render: an identical frame is not drawn again", key == Painter.PillKey(Painter.Cells(Fake("normal"), false, Fourth.Auto, true, dp), dp, 1.25f, false));
+            Cell[] recoloured = Painter.Cells(Fake("normal"), false, Fourth.Auto, true, dp); recoloured[1].ValueColor = Color.Red;
+            Cell[] longer = Painter.Cells(Fake("normal"), false, Fourth.Auto, true, dp); longer[4].Frac += 0.01;
+            check("TC-235 render: a theme, DPI, hover, colour, bar or value change is drawn",
+                key != Painter.PillKey(Painter.Cells(Fake("normal"), false, Fourth.Auto, true, Palette.For(false)), Palette.For(false), 1.25f, false) &&
+                key != Painter.PillKey(frame, dp, 1.5f, false) && key != Painter.PillKey(frame, dp, 1.25f, true) &&
+                key != Painter.PillKey(recoloured, dp, 1.25f, false) && key != Painter.PillKey(longer, dp, 1.25f, false) &&
+                key != Painter.PillKey(Painter.Cells(Fake("warm"), false, Fourth.Auto, true, dp), dp, 1.25f, false));
+            // TC-243 (QA-25): settings values are read in any case, like the keys.
+            check("TC-243 settings: fourth=GPU and Fourth = Disk are read in any case",
+                Settings.Parse(new string[] { "fourth=GPU" }).FourthMetric == Fourth.Gpu && Settings.Parse(new string[] { "FOURTH = Disk" }).FourthMetric == Fourth.Disk &&
+                Settings.Parse(new string[] { "fourth=gpu" }).FourthMetric == Fourth.Gpu && Settings.Parse(new string[] { "fourth=other" }).FourthMetric == Fourth.Auto);
+            Settings parsed = Settings.Parse(new string[] { "interval=5", "unit=f", "offset=12", "download=OFF", "no equals sign" });
+            check("TC-243 settings: the other keys still parse", parsed.IntervalSec == 5 && parsed.Fahrenheit && parsed.OffsetFromRight == 12 && !parsed.Download && parsed.FourthMetric == Fourth.Auto);
+            // TC-246 (QA-02): a self-test that stops with an exception fails the install gate (exit 3) instead of crashing.
+            string gateReport = Path.Combine(tmp, "hwwidget-selftest-gate-" + Guid.NewGuid().ToString("N") + ".txt");
+            try
+            {
+                bool gateThrew = false, gateOk = true;
+                try { gateOk = SelfInstall.RunGate(delegate(string f) { throw new InvalidOperationException("self-test stopped"); }, gateReport); }
+                catch { gateThrew = true; }
+                check("TC-246 install: a self-test that throws fails the gate instead of crashing", !gateThrew && !gateOk);
+                File.WriteAllText(gateReport, "9 passed, 0 failed");
+                bool fresh = SelfInstall.RunGate(delegate(string f) { File.WriteAllLines(f, new string[] { "PASS x", "1 passed, 0 failed" }); return 0; }, gateReport);
+                File.WriteAllText(gateReport, "9 passed, 0 failed");
+                bool stale = SelfInstall.RunGate(delegate(string f) { return 0; }, gateReport);
+                check("TC-246 install: the gate passes only a fresh clean report", fresh && !stale);
+            }
+            finally { try { File.Delete(gateReport); } catch { } }
+            // TC-250 (QA-12): the install finds its own exe and report also in a folder named like p%41q.
+            check("TC-250 install: the exe path is the real file, also in a folder with %41 in its name", File.Exists(SelfInstall.ExePath));
+            // TC-259 (QA-18): every light-mode text colour reaches 4.5:1 on the pill and card backgrounds; dark mode is unchanged.
+            Palette lp = Palette.For(false);
+            Color[] lightBgs = { Palette.Hex("#FFFFFF"), Palette.Hex("#EEF1F8"), Palette.Hex("#F3F5FB") };
+            List<Color> tints = new List<Color>();
+            foreach (Color accent in new Color[] { Painter.CpuA, Painter.CpuB, Painter.RamA, Painter.RamB, Painter.GpuA, Painter.GpuB, Painter.DskA, Painter.DskB, Painter.NetA, Painter.NetB })
+                tints.Add(Painter.LabelTint(accent, lp));
+            foreach (Cell lc in Painter.Cells(Fake("normal"), false, Fourth.Auto, true, lp)) { tints.Add(lc.LabelColor); tints.Add(lc.ValueColor); }
+            double lowest = MinContrast(tints, lightBgs);
+            check("TC-259 contrast: light label tints of every accent reach 4.5:1 (lowest " + lowest.ToString("0.00", CultureInfo.InvariantCulture) + ")", lowest >= 4.5);
+            List<Color> tempColours = new List<Color>();
+            foreach (double tv in new double[] { double.NaN, 20, 35, 42, 50, 57, 65, 70, 75, 79, 82, 85, 90, 95, 105 })
+            {
+                HwSnapshot ts = new HwSnapshot(); ts.CpuTempC = tv;
+                Cell tcell = Painter.Cells(ts, false, Fourth.Disk, false, lp)[0];
+                tempColours.Add(tcell.LabelColor);
+                if (!double.IsNaN(tv)) { tempColours.Add(tcell.ValueColor); tempColours.Add(Painter.CardRows(ts, false, lp)[0].ValueColor); }
+            }
+            lowest = MinContrast(tempColours, lightBgs);
+            check("TC-259 contrast: light temperature colours and the unknown grey reach 4.5:1 (lowest " + lowest.ToString("0.00", CultureInfo.InvariantCulture) + ")", lowest >= 4.5);
+            lowest = MinContrast(new Color[] { lp.Warn, lp.Crit, Painter.PinnedColor(lp) }, lightBgs);
+            check("TC-259 contrast: light warn, crit and Pinned reach 4.5:1 (lowest " + lowest.ToString("0.00", CultureInfo.InvariantCulture) + ")", lowest >= 4.5);
+            check("TC-259 contrast: dark warn, crit and Pinned are unchanged", Painter.PinnedColor(dp).ToArgb() == Palette.Hex("#A78BFA").ToArgb() &&
+                dp.Warn.ToArgb() == Palette.Hex("#FCD34D").ToArgb() && dp.Crit.ToArgb() == Palette.Hex("#FF8FA3").ToArgb());
+            // TC-264 (QA-22): ages come from a monotonic clock, and a clock that steps back never freezes a re-read.
+            check("TC-264 clock: a re-read stays due when the clock steps back", HwSampler.Due(1000, 600000, 3000) && HwSampler.Due(6000, 3000, 3000) && !HwSampler.Due(5000, 3000, 3000));
+            check("TC-264 gpu: a negative adapter-list age re-reads the adapters", HwSampler.AdaptersStale(TimeSpan.FromMinutes(-30), false, false) && HwSampler.AdaptersStale(TimeSpan.FromSeconds(-1), true, false));
+            // TC-265 (QA-24): NVML's device 0 stands for a GPU only when there is exactly 1 NVIDIA GPU, and a failed open is tried again.
+            check("TC-265 gpu: the NVML temperature is used only with exactly 1 NVIDIA GPU",
+                HwSampler.NvmlFits(new string[] { "NVIDIA Quadro RTX 4000 with Max-Q Design", "Intel(R) UHD Graphics" }) &&
+                !HwSampler.NvmlFits(new string[] { "NVIDIA GeForce RTX 4090", "NVIDIA GeForce RTX 3060" }) && !HwSampler.NvmlFits(new string[] { "Intel(R) Arc(TM) Graphics" }));
+            check("TC-265 gpu: a failed NVML open is tried again after 10 s, doubling up to 10 minutes",
+                HwSampler.NvmlRetryMs(1) == 10000 && HwSampler.NvmlRetryMs(2) == 20000 && HwSampler.NvmlRetryMs(3) == 40000 && HwSampler.NvmlRetryMs(7) == 600000 && HwSampler.NvmlRetryMs(1000) == 600000);
+            // TC-309 (QA-05): a helper install that fails after the copy leaves no helper exe, so the menu offers Enable again.
+            string helperBox = Path.Combine(tmp, "hwwidget-selftest-helper-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                string hsrc = Path.Combine(helperBox, "source.bin"), hbin = Path.Combine(helperBox, "bin"), hexe = Path.Combine(hbin, "helper.bin"), hkeep = Path.Combine(hbin, "keep.txt");
+                Directory.CreateDirectory(helperBox);
+                File.WriteAllText(hsrc, "x");
+                bool removed = HelperSetup.CopyThen(hsrc, hbin, hexe, delegate { return 3; }) == 3 && !File.Exists(hexe) && !Directory.Exists(hbin);
+                bool threw = false;
+                try { HelperSetup.CopyThen(hsrc, hbin, hexe, delegate { throw new IOException("stopped"); }); }
+                catch (IOException) { threw = true; }
+                check("TC-309 helper: a failed install removes the copied exe and its empty folder", removed && threw && !File.Exists(hexe) && !Directory.Exists(hbin));
+                Directory.CreateDirectory(hbin);
+                File.WriteAllText(hkeep, "x");
+                bool kept = HelperSetup.CopyThen(hsrc, hbin, hexe, delegate { return 4; }) == 4 && !File.Exists(hexe) && File.Exists(hkeep);
+                check("TC-309 helper: a folder with other files stays, and a good install keeps the exe", kept && HelperSetup.CopyThen(hsrc, hbin, hexe, delegate { return 0; }) == 0 && File.Exists(hexe));
+                // A reinstall that fails also removes the old scheduled task: Uninstall no longer sees a helper without its exe.
+                int undone = 0;
+                bool undoOnFail = HelperSetup.CopyThen(hsrc, hbin, hexe, delegate { return 6; }, delegate { undone++; }) == 6 && undone == 1;
+                bool undoOnThrow = false;
+                try { HelperSetup.CopyThen(hsrc, hbin, hexe, delegate { throw new IOException("stopped"); }, delegate { undone++; }); }
+                catch (IOException) { undoOnThrow = undone == 2; }
+                bool keptOnOk = HelperSetup.CopyThen(hsrc, hbin, hexe, delegate { return 0; }, delegate { undone++; }) == 0 && undone == 2;
+                check("TC-309 helper: a failed install also removes its scheduled task, a good one keeps it", undoOnFail && undoOnThrow && keptOnOk);
+            }
+            finally { try { Directory.Delete(helperBox, true); } catch { } }
+            // TC-310 (QA-06): a failed shortcut still asks for the helper; both failing is exit 8.
+            bool asked = false, askedAnyway = false;
+            int both = SelfInstall.Outcome(false, true, delegate { asked = true; return false; });
+            check("TC-310 install: a failed shortcut still asks for the helper, and both failing exit 8", asked && both == 8);
+            check("TC-310 install: exit codes 0, 4 and 7 as before, and no helper without --cpu-temp",
+                SelfInstall.Outcome(true, false, delegate { askedAnyway = true; return false; }) == 0 && SelfInstall.Outcome(false, false, delegate { askedAnyway = true; return false; }) == 4 && !askedAnyway &&
+                SelfInstall.Outcome(true, true, delegate { return true; }) == 0 && SelfInstall.Outcome(false, true, delegate { return true; }) == 4 && SelfInstall.Outcome(true, true, delegate { return false; }) == 7);
+            // The CPU temperature helper's reading counts only from the installed helper's folder owned by Administrators or SYSTEM.
+            SecurityIdentifier me = WindowsIdentity.GetCurrent().User;
+            bool meSystem = me.IsWellKnown(WellKnownSidType.LocalSystemSid);
+            string readingBox = Path.Combine(tmp, "hwwidget-selftest-reading-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(readingBox);
+            try
+            {
+                // The folder owned by this user; a temp folder whose owner can't be set skips only those assertions.
+                bool userOwned = false;
+                try
+                {
+                    DirectorySecurity owner = Directory.GetAccessControl(readingBox, AccessControlSections.Owner);
+                    owner.SetOwner(me);
+                    Directory.SetAccessControl(readingBox, owner);
+                    userOwned = !meSystem;
+                }
+                catch { }
+                long nowRead = HelperFile.UnixMs(DateTime.UtcNow);
+                File.WriteAllText(Path.Combine(readingBox, "cpu-temp.txt"), HelperFile.Format(nowRead, 74, "x"));
+                check("helper reading: only a folder owned by Administrators or SYSTEM counts" + (userOwned ? "" : " (user-owned folder part skipped)"),
+                    HelperFile.OwnerTrusted(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null)) && HelperFile.OwnerTrusted(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null)) &&
+                    !HelperFile.OwnerTrusted(new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null)) && !HelperFile.OwnerTrusted(null) &&
+                    (!userOwned || !HelperFile.AdminOwned(readingBox)) && !HelperFile.AdminOwned(Path.Combine(readingBox, "missing")));
+                string hsrc2;
+                check("helper reading: only from the installed helper's admin-owned folder",
+                    (!userOwned || double.IsNaN(HelperFile.ReadFrom(readingBox, true, nowRead, out hsrc2))) && double.IsNaN(HelperFile.ReadFrom(readingBox, false, nowRead, out hsrc2)));
+            }
+            finally { try { Directory.Delete(readingBox, true); } catch { } }
 
             lines.Add(string.Format("{0} passed, {1} failed", pass, fail));
             File.WriteAllLines(outFile, lines.ToArray());

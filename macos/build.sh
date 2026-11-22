@@ -8,10 +8,14 @@ version="$(sed -n 's/^let appVersion = "\(.*\)"$/\1/p' "$here/Sources/Core.swift
 green=$'\e[32m'; red=$'\e[31m'; dim=$'\e[2m'; off=$'\e[0m'
 command -v swiftc >/dev/null || { echo "${red}❌ swiftc not found. Run: xcode-select --install${off}"; exit 1; }
 
+# A Rosetta shell on Apple Silicon reports x86_64 from uname, which would leave out the Apple Silicon sensors.
+arch="$(uname -m)"
+if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ]; then arch=arm64; fi
+
 rm -rf "$out"
 mkdir -p "$out/Contents/MacOS" "$out/Contents/Resources"
 echo "${dim}Compiling ${version}…${off}"
-swiftc -O -swift-version 5 -target "$(uname -m)-apple-macos13.0" -framework IOKit \
+swiftc -O -swift-version 5 -target "$arch-apple-macos13.0" -framework IOKit \
   -o "$out/Contents/MacOS/HWWidget" "$here"/Sources/*.swift
 
 cat > "$out/Contents/Info.plist" <<PLIST

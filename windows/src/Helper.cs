@@ -46,9 +46,10 @@ namespace HwWidget
     public static class HelperFile
     {
         public const int MaxAgeSec = 15;
+        const string FileName = "cpu-temp.txt";
 
         public static string Dir { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "HWWidget"); } }
-        public static string FilePath { get { return Path.Combine(Dir, "cpu-temp.txt"); } }
+        public static string FilePath { get { return Path.Combine(Dir, FileName); } }
 
         public static long UnixMs(DateTime utc) { return (long)(utc - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds; }
 
@@ -74,17 +75,39 @@ namespace HwWidget
             return t;
         }
 
-        public static double Read(out string source)
+        // Only Administrators or SYSTEM may own the helper's data folder; the installer sets Administrators.
+        internal static bool OwnerTrusted(SecurityIdentifier owner)
         {
-            source = "";
+            return owner != null && (owner.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid) || owner.IsWellKnown(WellKnownSidType.LocalSystemSid));
+        }
+
+        // A plain folder (not a link to another place) whose owner is Administrators or SYSTEM.
+        internal static bool AdminOwned(string dir)
+        {
             try
             {
-                string path = FilePath;
+                DirectoryInfo di = new DirectoryInfo(dir);
+                if (!di.Exists || (di.Attributes & FileAttributes.ReparsePoint) != 0) return false;
+                return OwnerTrusted(di.GetAccessControl(AccessControlSections.Owner).GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier);
+            }
+            catch { return false; }
+        }
+
+        public static double Read(out string source) { return ReadFrom(Dir, HelperSetup.Installed, UnixMs(DateTime.UtcNow), out source); }
+
+        // The reading counts only while the helper is installed and its folder is admin-owned.
+        internal static double ReadFrom(string dir, bool installed, long nowUnixMs, out string source)
+        {
+            source = "";
+            if (!installed || !AdminOwned(dir)) return double.NaN;
+            try
+            {
+                string path = Path.Combine(dir, FileName);
                 if (!File.Exists(path)) return double.NaN;
                 string text;
                 using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                 using (StreamReader r = new StreamReader(fs, Encoding.UTF8)) text = r.ReadToEnd();
-                return Parse(text, UnixMs(DateTime.UtcNow), out source);
+                return Parse(text, nowUnixMs, out source);
             }
             catch { return double.NaN; }
         }
@@ -250,9 +273,41 @@ namespace HwWidget
         {
             if (!IsElevated()) return 5;
             StopHelper();
-            Directory.CreateDirectory(BinDir);
-            File.Copy(Process.GetCurrentProcess().MainModule.FileName, BinPath, true);
+            // A failed install also removes the task: one left from an earlier install would point at a removed exe,
+            // and Uninstall no longer sees a helper without its exe.
+            return CopyThen(Process.GetCurrentProcess().MainModule.FileName, BinDir, BinPath, Register, delegate { Schtasks("/Delete /F /TN \"" + TaskName + "\""); });
+        }
 
+        // Copies the helper exe into its folder, then runs the steps that register it. When a step fails, undo runs and
+        // the copy goes again, so Installed stays false and the menu offers Enable again.
+        internal static int CopyThen(string source, string dir, string exe, Func<int> steps) { return CopyThen(source, dir, exe, steps, null); }
+
+        internal static int CopyThen(string source, string dir, string exe, Func<int> steps, Action undo)
+        {
+            Directory.CreateDirectory(dir);
+            File.Copy(source, exe, true);
+            int rc = -1;
+            try { rc = steps(); }
+            finally
+            {
+                if (rc != 0)
+                {
+                    if (undo != null) try { undo(); } catch { }
+                    RemoveCopy(exe, dir);
+                }
+            }
+            return rc;
+        }
+
+        // Deletes the copied exe, and its folder when nothing else is left in it.
+        internal static void RemoveCopy(string exe, string dir)
+        {
+            try { if (File.Exists(exe)) File.Delete(exe); } catch { }
+            try { if (Directory.Exists(dir) && Directory.GetFileSystemEntries(dir).Length == 0) Directory.Delete(dir, false); } catch { }
+        }
+
+        static int Register()
+        {
             // Data folder: SYSTEM and Administrators write, everyone else only reads (no planted links or fake values).
             DirectorySecurity sec = new DirectorySecurity();
             sec.SetAccessRuleProtection(true, false);

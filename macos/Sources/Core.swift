@@ -58,7 +58,7 @@ struct Palette {
         card1: RGB(hex: "26263B"), card2: RGB(hex: "15151F"), edge: RGB(0, 0, 0, 0.27), borderAlpha: 0.69, dark: true)
     static let lightTheme = Palette(
         bg1: RGB(hex: "FFFFFF"), bg2: RGB(hex: "EEF1F8"), text: RGB(hex: "111827"), sub: RGB(hex: "5B6478"),
-        track: RGB(0.07, 0.09, 0.15, 0.18), sep: RGB(0.07, 0.09, 0.15, 0.12), warn: RGB(hex: "B45309"), crit: RGB(hex: "E11D48"),
+        track: RGB(0.07, 0.09, 0.15, 0.18), sep: RGB(0.07, 0.09, 0.15, 0.12), warn: RGB(hex: "92400E"), crit: RGB(hex: "BE123C"),
         card1: RGB(hex: "FFFFFF"), card2: RGB(hex: "F3F5FB"), edge: RGB(0.06, 0.09, 0.16, 0.13), borderAlpha: 0.92, dark: false)
 }
 
@@ -159,7 +159,8 @@ func accessibleText(_ cells: [Cell]) -> String {
 /// Download rate on a log scale up to 1 Gbit/s.
 func netFrac(_ bps: Double) -> Double { bps.isFinite ? log10(1 + max(0, bps)) / log10(1 + 125e6) : .nan }
 
-private func labelTint(_ accent: RGB, _ p: Palette) -> RGB { p.dark ? accent.lighten(0.2) : accent.darken(0.22) }
+// Light labels and values are darkened enough for 4.5:1 text contrast on the light pill and card.
+private func labelTint(_ accent: RGB, _ p: Palette) -> RGB { p.dark ? accent.lighten(0.2) : accent.darken(0.5) }
 private func barTone(_ c: RGB, _ p: Palette) -> RGB { p.dark ? c : c.darken(0.1) }
 private func valueColor(_ lvl: Int, _ p: Palette) -> RGB { lvl == 2 ? p.crit : lvl == 1 ? p.warn : p.text }
 
@@ -184,14 +185,14 @@ func buildCells(_ s: Snapshot, fahrenheit: Bool = false, fourth: Fourth = .auto,
     let tcol = tempColor(tc), tl = tempLevel(tc, fahrenheit)
     var cells = [Cell(label: label, value: Fmt.temp(tc, fahrenheit), frac: tc.isFinite ? (tc - 30) / 70 : .nan,
                       bar1: barTone(tempColor(35), p), bar2: barTone(tcol, p), labelColor: labelTint(tcol, p),
-                      valueColor: tl > 0 ? valueColor(tl, p) : (p.dark ? tcol.lighten(0.45) : tcol.darken(0.45)), level: tl)]
+                      valueColor: tl > 0 ? valueColor(tl, p) : (p.dark ? tcol.lighten(0.45) : tcol.darken(0.5)), level: tl)]
     if !tc.isFinite && !s.thermalState.isEmpty {
         // No readable sensor: show macOS's own thermal state instead of a dash.
         let st = ["Nominal": (0, "OK", 45.0), "Fair": (0, "FAIR", 70.0), "Serious": (1, "HOT", 85.0), "Critical": (2, "CRIT", 98.0)][s.thermalState]
         if let st {
             let col = tempColor(st.2)
             cells[0] = Cell(label: "TEMP", value: st.1, frac: (st.2 - 30) / 70, bar1: barTone(tempColor(35), p), bar2: barTone(col, p),
-                            labelColor: labelTint(col, p), valueColor: st.0 > 0 ? valueColor(st.0, p) : (p.dark ? col.lighten(0.45) : col.darken(0.45)),
+                            labelColor: labelTint(col, p), valueColor: st.0 > 0 ? valueColor(st.0, p) : (p.dark ? col.lighten(0.45) : col.darken(0.5)),
                             level: st.0)
         }
     }
@@ -228,7 +229,7 @@ func cardRows(_ s: Snapshot, fahrenheit: Bool = false, palette p: Palette = .dar
         : s.thermalState.isEmpty ? "No CPU temperature sensor found" : "Thermal state: \(s.thermalState)"
     rows.append(CardRow(title: "Temperature", sub: tsub, value: s.cpuTempC.isFinite ? Fmt.tempLong(s.cpuTempC, fahrenheit) : (s.thermalState.isEmpty ? dash : s.thermalState),
                         frac: (s.cpuTempC - 30) / 70, a: tempColor(35), b: tc, dot: tc,
-                        valueColor: tl > 0 ? valueColor(tl, p) : (p.dark ? tc.lighten(0.35) : tc.darken(0.45))))
+                        valueColor: tl > 0 ? valueColor(tl, p) : (p.dark ? tc.lighten(0.35) : tc.darken(0.5))))
     rows.append(heat(CardRow(title: "CPU", sub: s.cpuName.isEmpty ? "Processor" : s.cpuName, value: Fmt.pct(s.cpuPercent), frac: s.cpuPercent / 100,
                         a: Colors.cpu.0, b: Colors.cpu.1, valueColor: valueColor(level(s.cpuPercent, Thresholds.cpu), p)), level(s.cpuPercent, Thresholds.cpu)))
     let msub = s.ramUsedGB.isFinite ? "\(Fmt.gb(s.ramUsedGB).replacingOccurrences(of: " GB", with: "")) of \(Fmt.gb(s.ramTotalGB)) in use" : "Usage unavailable"
@@ -511,5 +512,46 @@ func coreSelfTest() -> (passed: Int, failed: Int) {
     check("fit: never below 1 cell", one.count == 1)
     one.reset()
     check("fit: reset tries the full pill", one.count == 4)
+
+    // TC-259: light-mode labels and values reach 4.5:1 text contrast (WCAG) on the light pill and card backgrounds.
+    func luminance(_ c: RGB) -> Double {
+        func lin(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+    func worstContrast(_ cols: [RGB]) -> Double {
+        var w = Double.infinity
+        for c in cols {
+            for bg in ["FFFFFF", "EEF1F8", "F3F5FB"] {
+                let a = luminance(c), b = luminance(RGB(hex: bg))
+                w = min(w, (max(a, b) + 0.05) / (min(a, b) + 0.05))
+            }
+        }
+        return w
+    }
+    let lp = Palette.lightTheme
+    let accentEnds = [Colors.cpu, Colors.ram, Colors.gpu, Colors.disk, Colors.net].flatMap { [$0.0, $0.1] }
+    check("TC-259 contrast: light label tint of every accent end", worstContrast(accentEnds.map { labelTint($0, lp) }) >= 4.5)
+    var busy = Snapshot(); busy.cpuPercent = 10; busy.ramPercent = 10; busy.gpuPercent = 10
+    busy.gpus = [GpuInfo(name: "GPU", percent: 10)]
+    let pillLabels = (buildCells(busy, download: true, palette: lp) + buildCells(busy, fourth: .disk, palette: lp)).map(\.labelColor)
+    check("TC-259 contrast: light pill labels as drawn (CPU RAM GPU DISK DOWN)", worstContrast(pillLabels) >= 4.5)
+    var tempLabels = [buildCells(Snapshot(), palette: lp)[0].labelColor], tempValues: [RGB] = []
+    for i in 0...160 {
+        var s = Snapshot(); s.cpuTempC = 20 + Double(i) / 2
+        let cell = buildCells(s, palette: lp)[0]
+        tempLabels.append(cell.labelColor)
+        if cell.level == 0 { tempValues += [cell.valueColor, cardRows(s, palette: lp)[0].valueColor] }
+    }
+    check("TC-259 contrast: light TEMP label over the whole ramp and unknown grey", worstContrast(tempLabels) >= 4.5)
+    check("TC-259 contrast: light TEMP values below 80 C (pill and card)", worstContrast(tempValues) >= 4.5)
+    var states: [RGB] = []
+    for st in ["Nominal", "Fair", "Serious", "Critical"] {
+        var s = Snapshot(); s.thermalState = st
+        let cell = buildCells(s, palette: lp)[0]
+        states += [cell.labelColor, cell.valueColor]
+    }
+    check("TC-259 contrast: light thermal-state label and value", worstContrast(states) >= 4.5)
+    check("TC-259 contrast: light warn and crit", worstContrast([lp.warn, lp.crit]) >= 4.5)
+    check("TC-259 contrast: dark mode unchanged", Palette.darkTheme.warn.hex == "#FCD34D" && Palette.darkTheme.crit.hex == "#FF8FA3")
     return (passed, failed)
 }

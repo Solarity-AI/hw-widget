@@ -18,6 +18,7 @@ set "DIR=%LOCALAPPDATA%\Programs\HW Widget"
 set "EXE=%DIR%\HWWidget.exe"
 set "NEW=%DIR%\HWWidget.new.exe"
 set "OLD=%DIR%\HWWidget.old.exe"
+set "PREV="
 rem call expands %% signs a second time, so the paths reach build.cmd through variables (a folder name may hold %).
 set "BUILD=%~dp0windows\build.cmd"
 echo Installing HW Widget...
@@ -31,6 +32,8 @@ call "%%BUILD%%" "%%NEW%%"
 if not errorlevel 1 goto built
 del "%NEW%" >nul 2>&1
 echo      That folder is blocked. Installing into this folder instead.
+rem The widget running now may be the one in that folder: if the new one fails, that is the version to restart.
+if exist "%EXE%" set "PREV=%EXE%"
 set "DIR=%~dp0windows\bin"
 set "EXE=%~dp0windows\bin\HWWidget.exe"
 set "NEW=%~dp0windows\bin\HWWidget.new.exe"
@@ -51,19 +54,24 @@ if errorlevel 1 goto swapfail
 :swapped
 start "" /wait "%EXE%" --install %*
 set "RC=%errorlevel%"
-rem The old exes go only once the new one passed its self-test: until then they are the way back.
-if "%RC%"=="3" goto selftest
+rem The old exes go only once the new one passed its self-test: until then they are the way back. 0, 4, 7 and 8 mean
+rem it passed and runs; 3 is a failed self-test, and any other code (a crash, a stopped exe) is treated the same way.
+if not "%RC%"=="0" if not "%RC%"=="4" if not "%RC%"=="7" if not "%RC%"=="8" goto selftest
 del "%OLD%" >nul 2>&1
 if /i not "%EXE%"=="%OLDEXE%" del "%OLDEXE%" >nul 2>&1
 if "%RC%"=="4" goto startup
 if "%RC%"=="7" goto helper
-if not "%RC%"=="0" goto fail
+if "%RC%"=="8" goto startup
 echo OK   HW Widget installed and running. It sits on the taskbar left of the tray and starts with Windows.
 echo      Hover it for details, click to pin the card, right-click for settings.
-if exist "%ProgramFiles%\HWWidget\HWWidgetSensor.exe" echo      The CPU temperature helper keeps its old version; right-click the pill, remove it and enable it again to update it.
+rem --cpu-temp has just put the new helper in place, so the note is only for an install without it.
+set "CPUTEMP="
+for %%A in (%*) do if /i "%%~A"=="--cpu-temp" set "CPUTEMP=1"
+if not defined CPUTEMP if exist "%ProgramFiles%\HWWidget\HWWidgetSensor.exe" echo      The CPU temperature helper keeps its old version; right-click the pill, remove it and enable it again to update it.
 goto end
 :selftest
-echo ERROR Self-test failed. Details: "%DIR%\selftest.txt"
+if "%RC%"=="3" echo ERROR Self-test failed. Details: "%DIR%\selftest.txt"
+if not "%RC%"=="3" echo ERROR Install failed (exit code %RC%).
 if not exist "%OLD%" goto selftestold
 move /y "%OLD%" "%EXE%" >nul 2>&1
 if errorlevel 1 goto end
@@ -71,6 +79,12 @@ echo      Your previous version was put back and restarted.
 start "" "%EXE%"
 goto end
 :selftestold
+rem After the switch to windows\bin the previous version is the one left in the Programs folder: restart that one.
+if not defined PREV goto selftestolder
+echo      Your previous version was restarted.
+start "" "%PREV%"
+goto end
+:selftestolder
 rem An update from 1.2.1 or older has its previous exe in the old folder: restart that one.
 if /i "%EXE%"=="%OLDEXE%" goto end
 if not exist "%OLDEXE%" goto end
@@ -79,9 +93,12 @@ start "" "%OLDEXE%"
 goto end
 :startup
 echo WARN HW Widget is running, but the Startup shortcut could not be created. Turn on "Start with Windows" in its menu.
+rem 8: the helper also failed.
+if "%RC%"=="8" goto helperwarn
 goto end
 :helper
 echo OK   HW Widget installed and running.
+:helperwarn
 echo WARN CPU temperature helper not installed: the admin prompt was declined or failed.
 echo      To try again, right-click the pill and choose Enable CPU temperature (admin).
 goto end
@@ -96,9 +113,7 @@ del "%NEW%" >nul 2>&1
 del "%OLD%" >nul 2>&1
 echo ERROR Could not replace "%EXE%": it is still in use. Restarting the installed widget.
 if exist "%EXE%" start "" "%EXE%"
-goto end
-:fail
-echo ERROR Install failed (exit code %RC%).
+if not exist "%EXE%" if defined PREV start "" "%PREV%"
 goto end
 
 :outside
@@ -108,20 +123,29 @@ set "LOG=%RUN%\install-outside.log"
 set "WRAP=%RUN%\install-outside.cmd"
 set "TASK=HW Widget install"
 del "%LOG%" >nul 2>&1
+rem The wrapper holds no path: echo can turn letters the code page lacks into "?", and call reads ^ and % in a path
+rem again. It finds this installer and its log from its own folder (windows\bin) instead.
 > "%WRAP%" echo @echo off
 >> "%WRAP%" echo set "HWW_OUTSIDE=1"
->> "%WRAP%" echo call "%~f0" %* ^> "%LOG%" 2^>^&1
->> "%WRAP%" echo echo HWW-INSTALL-DONE^>^> "%LOG%"
+>> "%WRAP%" echo set "SELF=%%~dp0..\..\%~nx0"
+>> "%WRAP%" echo call "%%%%SELF%%%%" %* ^> "%%~dp0install-outside.log" 2^>^&1
+>> "%WRAP%" echo echo HWW-INSTALL-DONE^>^> "%%~dp0install-outside.log"
 echo This window runs inside an app's private copy of your user folders; installing through Task Scheduler instead...
-schtasks /Create /TN "%TASK%" /TR "\"%WRAP%\"" /SC ONCE /ST 00:00 /F >nul 2>&1
+rem Delayed expansion on this line only, so & and ^ in the folder name reach schtasks as they are; elsewhere a ! in
+rem the folder name must stay plain text.
+setlocal EnableDelayedExpansion
+schtasks /Create /TN "%TASK%" /TR "\"!WRAP!\"" /SC ONCE /ST 00:00 /F >nul 2>&1
+endlocal
 if errorlevel 1 goto outsidefail
-schtasks /Run /TN "%TASK%" >nul 2>&1
+rem /I starts the task even on battery: a task made without XML gets "start only on AC power".
+schtasks /Run /I /TN "%TASK%" >nul 2>&1
 if errorlevel 1 goto outsidefail
 set /a "TRIES=0"
 :outsidewait
 call :wait 1
-findstr /c:"HWW-INSTALL-DONE" "%LOG%" >nul 2>&1
-if not errorlevel 1 goto outsidedone
+rem findstr reads the log through < because it cannot open a path with letters outside the ANSI code page by name.
+rem A failed < leaves the exit code as it was, so && (not errorlevel) decides.
+if exist "%LOG%" findstr /c:"HWW-INSTALL-DONE" < "%LOG%" >nul 2>&1 && goto outsidedone
 set /a "TRIES+=1"
 if %TRIES% lss 600 goto outsidewait
 schtasks /Delete /TN "%TASK%" /F >nul 2>&1
@@ -130,7 +154,7 @@ goto end
 :outsidedone
 schtasks /Delete /TN "%TASK%" /F >nul 2>&1
 del "%WRAP%" >nul 2>&1
-findstr /v /c:"HWW-INSTALL-DONE" "%LOG%"
+findstr /v /c:"HWW-INSTALL-DONE" < "%LOG%"
 goto end
 :outsidefail
 schtasks /Delete /TN "%TASK%" /F >nul 2>&1

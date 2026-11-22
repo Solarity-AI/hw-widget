@@ -143,7 +143,7 @@ export function drawCard(cr, rows, p, {pinned = false, title = 'Hardware', foote
     cr.setSource(linear(x, y + 9, x + 12, y + 21, [[0, '#22D3EE'], [1, '#F472B6']]));
     cr.fill();
     text(cr, title, 14, Pango.Weight.BOLD, p.text, x + 20, y + 3, 150, 24, 0);
-    text(cr, pinned ? 'Pinned' : 'Live', 10.5, Pango.Weight.NORMAL, pinned ? '#A78BFA' : p.sub, x + w - 120, y + 3, 120, 24, 1);
+    text(cr, pinned ? 'Pinned' : 'Live', 10.5, Pango.Weight.NORMAL, pinned ? p.pinned : p.sub, x + w - 120, y + 3, 120, 24, 1);
     y = CARD.headH;
     for (const r of rows) {
         cr.arc(x + 4.5, y + 12.5, 4.5, 0, 2 * Math.PI);
