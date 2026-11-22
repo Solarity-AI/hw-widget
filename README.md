@@ -59,7 +59,7 @@ Get the code first: [download the latest release](https://github.com/Solarity-AI
 Double-click `Install HW Widget (Windows).cmd`.
 
 It compiles the widget with the C# compiler built into Windows straight into `%LOCALAPPDATA%\Programs\HW Widget` (no SDK, no PowerShell, no downloads, no admin rights). If Windows or an antivirus refuses that folder, it builds into `windows\bin` inside the repository folder instead; then keep that folder where it is, because the Startup shortcut points into it. The widget then runs its self-test, adds a shortcut to your Startup folder and starts.
-Updating is the same: run the installer again. The new build is compiled first, so a failed build leaves the running widget alone.
+Updating is the same: run the installer again. The new build is compiled first, so a failed build leaves the running widget alone, and a build that fails its self-test is replaced by the previous version again.
 
 Started from a terminal inside a Store app (for example the Claude desktop app), the installer would only reach that app's private copy of your user folders, so the widget would vanish when the app closes and never start at sign-in. The installer notices this and runs the install through a one-time Task Scheduler task instead, then deletes the task. `--check-sandbox` only reports which case applies.
 
@@ -141,11 +141,11 @@ Each command removes the widget, its startup entry and its settings. Run it from
 
 | Platform | Command | What it checks |
 | --- | --- | --- |
-| Windows | `windows\build.cmd`, then `windows\bin\HWWidget.exe --selftest out.txt` | 48 sensor, helper, install, layout, formatting, full-screen and accessibility checks |
-| Windows | `windows\tests\scripts-test.ps1` | 8 build, install and uninstall checks (folder names with brackets, spaces, parentheses and `&`; a fresh self-test report; the Startup shortcut) |
+| Windows | `windows\build.cmd`, then `windows\bin\HWWidget.exe --selftest out.txt` | 56 sensor, helper, install, layout, formatting, full-screen and accessibility checks |
+| Windows | `windows\tests\scripts-test.ps1` | 21 build, install and uninstall checks (folder names with brackets, spaces, parentheses and `&`; a fresh self-test report; the Startup shortcut; rollback of a build that fails its self-test) |
 | Windows | `HWWidget.exe --render <dir>` / `--probe <secs> <csv>` | PNG renders of every state / live sensor log |
-| Linux | `sh linux/tests/run-docker.sh` | 92 parser, sensor-tree, nvidia-smi and model checks, 15 GNOME 42 module checks and 16 install and uninstall checks, in Docker on Debian trixie (GNOME 45+) and Ubuntu 22.04 (GNOME 42), plus PNG renders in `linux/tests/out` |
-| macOS | `sh macos/tests/run-docker.sh` | 63 model, parser, settings and menu-bar fit checks of the shared core, on Linux in Docker |
+| Linux | `sh linux/tests/run-docker.sh` | 97 parser, sensor-tree, nvidia-smi and model checks, 15 GNOME 42 module checks and 17 install and uninstall checks, in Docker on Debian trixie (GNOME 45+) and Ubuntu 22.04 (GNOME 42), plus PNG renders in `linux/tests/out` |
+| macOS | `sh macos/tests/run-docker.sh` | 67 model, parser, settings and menu-bar fit checks of the shared core, on Linux in Docker |
 | macOS | `HWWidget --self-test`, `--probe 10`, `--render <dir>` | The same checks, a live sensor log and PNG renders, on a Mac |
 
 CI runs all 3 platforms on pull requests and on manual runs, each only when its folder changes (Windows also when a root installer `.cmd` changes).

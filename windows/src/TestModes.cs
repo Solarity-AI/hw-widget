@@ -179,6 +179,36 @@ namespace HwWidget
             check("rate short: K to M at 999.5 K", Fmt.RateShort(999.5 * 1024) == "1.0M" && Fmt.RateShort(1023 * 1024) == "1.0M" && Fmt.RateShort(1024 * 1024) == "1.0M");
             check("rate short: one decimal below 9.95 M", Fmt.RateShort(9.94 * 1048576) == "9.9M" && Fmt.RateShort(9.96 * 1048576) == "10M" && Fmt.RateShort(999 * 1048576.0) == "999M");
             check("rate short: G, negative and unknown", Fmt.RateShort(1000 * 1048576.0) == "1.0G" && Fmt.RateShort(-5) == "0K" && Fmt.RateShort(double.NaN) == Fmt.Dash);
+            // QA-01: in °F the colour is judged on the °F number shown, so two readings that both show 175° look the same.
+            HwSnapshot f1 = new HwSnapshot(); f1.CpuTempC = 79.4; HwSnapshot f2 = new HwSnapshot(); f2.CpuTempC = 79.6;
+            Cell cf1 = Painter.Cells(f1, true, Fourth.Disk, false, Palette.For(true))[0], cf2 = Painter.Cells(f2, true, Fourth.Disk, false, Palette.For(true))[0];
+            check("QA-01 fmt: 79.4 and 79.6 C both show 175° in °F and share one colour", cf1.Value == "175°" && cf2.Value == "175°" && cf1.Level == cf2.Level && cf1.Level == 0);
+            HwSnapshot f3 = new HwSnapshot(); f3.CpuTempC = 79.8;
+            check("QA-01 fmt: 176°F (80 C) is amber, 194°F (90 C) is red", Painter.Cells(f3, true, Fourth.Disk, false, Palette.For(true))[0].Level == 1 && Fmt.TempLevel(90, true) == 2 && Fmt.TempLevel(89.6, false) == 2 && Fmt.TempLevel(79.4, false) == 0);
+            // QA-02: the card's rates and sizes roll over like the pill's: never "1000 KB/s" or "10.0".
+            check("QA-02 fmt: rate rolls over at the shown value", Fmt.Rate(1023999) == "1.0 MB/s" && Fmt.Rate(999.6) == "1.0 KB/s" && Fmt.Rate(10199) == "10 KB/s" && Fmt.Rate(9.94 * 1024) == "9.9 KB/s" && Fmt.Rate(999) == "999 B/s");
+            check("QA-02 fmt: 9.96 GB shows 10 GB", Fmt.GB(9.96) == "10 GB" && Fmt.GB(9.94) == "9.9 GB");
+            // QA-03: on a vertical taskbar the pill can't be dragged, so a shaky click still pins the card.
+            check("QA-03 drag: never starts on a vertical taskbar", !ZOrder.DragStarts(20, 1f, true) && ZOrder.DragStarts(20, 1f, false) && !ZOrder.DragStarts(4, 1f, false));
+            // QA-05: error.log stays small when the same error repeats every tick.
+            string logF = Path.Combine(Path.GetTempPath(), "hwwidget-selftest-log-" + Guid.NewGuid().ToString("N") + ".log");
+            try
+            {
+                for (int i = 0; i < 400; i++) Program.AppendCapped(logF, new string('x', 99) + "\n", 8192);
+                long len = new FileInfo(logF).Length;
+                check("QA-05 log: capped instead of growing without limit", len <= 8192 && len > 0 && File.ReadAllText(logF).EndsWith(new string('x', 99) + "\n"));
+            }
+            finally { try { File.Delete(logF); } catch { } }
+            // QA-10: VPN tunnels carry traffic the physical adapter already counts, so they are left out.
+            Dictionary<string, double> net = new Dictionary<string, double>();
+            net["Intel(R) Wi-Fi 6E AX211 160MHz"] = 1000; net["Tailscale Tunnel"] = 400; net["WireGuard Tunnel"] = 300;
+            net["TAP-Windows Adapter V9"] = 200; net["Wintun Userspace Tunnel"] = 100;
+            check("QA-10 net: tunnel adapters are not counted twice", HwSampler.SumNet(net) == 1000);
+            // QA-11: an empty adapter list or a new GPU LUID is re-read within seconds, not after 5 minutes.
+            check("QA-11 gpu: empty list or unknown LUID re-reads adapters after 10 s",
+                HwSampler.AdaptersStale(TimeSpan.FromSeconds(30), true, false) && HwSampler.AdaptersStale(TimeSpan.FromSeconds(30), false, true) &&
+                !HwSampler.AdaptersStale(TimeSpan.FromSeconds(30), false, false) && !HwSampler.AdaptersStale(TimeSpan.FromSeconds(5), true, true) &&
+                HwSampler.AdaptersStale(TimeSpan.FromMinutes(6), false, false));
             check("probe: unknown temperature is a dash", Unit(double.NaN, "C") == "—" && Unit(51, "C") == "51C");
             string tmp = Path.GetFullPath(Path.GetTempPath()), pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
             check("helper: task XML sits beside the helper exe", HelperSetup.TaskXmlPath.StartsWith(pf, StringComparison.OrdinalIgnoreCase) && !HelperSetup.TaskXmlPath.StartsWith(tmp, StringComparison.OrdinalIgnoreCase));

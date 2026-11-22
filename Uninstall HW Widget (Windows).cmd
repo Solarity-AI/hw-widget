@@ -13,7 +13,9 @@ if exist "%EXE%" goto run
 set "EXE=%~dp0windows\bin\HWWidget.exe"
 if exist "%EXE%" goto run
 rem The installed exe is gone (for example removed by an antivirus): build a temporary one from this folder.
-call "%~dp0windows\build.cmd" "%EXE%" >nul
+rem call expands %% signs a second time, so the paths reach build.cmd through variables (a folder name may hold %).
+set "BUILD=%~dp0windows\build.cmd"
+call "%%BUILD%%" "%%EXE%%" >nul
 if errorlevel 1 goto manual
 :run
 start "" /wait "%EXE%" --uninstall

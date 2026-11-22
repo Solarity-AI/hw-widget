@@ -17,23 +17,30 @@ set "OLDEXE=%LOCALAPPDATA%\HWWidget\HWWidget.exe"
 set "DIR=%LOCALAPPDATA%\Programs\HW Widget"
 set "EXE=%DIR%\HWWidget.exe"
 set "NEW=%DIR%\HWWidget.new.exe"
+set "OLD=%DIR%\HWWidget.old.exe"
+rem call expands %% signs a second time, so the paths reach build.cmd through variables (a folder name may hold %).
+set "BUILD=%~dp0windows\build.cmd"
 echo Installing HW Widget...
 rem Build next to the old exe first: a failed build must leave the running widget alone.
-call "%~dp0windows\build.cmd" "%NEW%"
+call "%%BUILD%%" "%%NEW%%"
 if not errorlevel 1 goto built
 rem An antivirus can lock a fresh exe while it scans it: wait and try once more before giving up.
 echo      Retrying in 3 seconds...
 call :wait 3
-call "%~dp0windows\build.cmd" "%NEW%"
+call "%%BUILD%%" "%%NEW%%"
 if not errorlevel 1 goto built
 del "%NEW%" >nul 2>&1
 echo      That folder is blocked. Installing into this folder instead.
 set "DIR=%~dp0windows\bin"
 set "EXE=%~dp0windows\bin\HWWidget.exe"
 set "NEW=%~dp0windows\bin\HWWidget.new.exe"
-call "%~dp0windows\build.cmd" "%NEW%"
+set "OLD=%~dp0windows\bin\HWWidget.old.exe"
+call "%%BUILD%%" "%%NEW%%"
 if errorlevel 1 goto buildfail
 :built
+rem Keep a copy of the old exe until the new one passes its self-test, so a failing build can be rolled back.
+del "%OLD%" >nul 2>&1
+if exist "%EXE%" copy /y "%EXE%" "%OLD%" >nul 2>&1
 taskkill /IM HWWidget.exe /F >nul 2>&1
 move /y "%NEW%" "%EXE%" >nul 2>&1
 if not errorlevel 1 goto swapped
@@ -42,10 +49,12 @@ call :wait 3
 move /y "%NEW%" "%EXE%" >nul 2>&1
 if errorlevel 1 goto swapfail
 :swapped
-if /i not "%EXE%"=="%OLDEXE%" del "%OLDEXE%" >nul 2>&1
 start "" /wait "%EXE%" --install %*
 set "RC=%errorlevel%"
+rem The old exes go only once the new one passed its self-test: until then they are the way back.
 if "%RC%"=="3" goto selftest
+del "%OLD%" >nul 2>&1
+if /i not "%EXE%"=="%OLDEXE%" del "%OLDEXE%" >nul 2>&1
 if "%RC%"=="4" goto startup
 if "%RC%"=="7" goto helper
 if not "%RC%"=="0" goto fail
@@ -55,6 +64,18 @@ if exist "%ProgramFiles%\HWWidget\HWWidgetSensor.exe" echo      The CPU temperat
 goto end
 :selftest
 echo ERROR Self-test failed. Details: "%DIR%\selftest.txt"
+if not exist "%OLD%" goto selftestold
+move /y "%OLD%" "%EXE%" >nul 2>&1
+if errorlevel 1 goto end
+echo      Your previous version was put back and restarted.
+start "" "%EXE%"
+goto end
+:selftestold
+rem An update from 1.2.1 or older has its previous exe in the old folder: restart that one.
+if /i "%EXE%"=="%OLDEXE%" goto end
+if not exist "%OLDEXE%" goto end
+echo      Your previous version was restarted.
+start "" "%OLDEXE%"
 goto end
 :startup
 echo WARN HW Widget is running, but the Startup shortcut could not be created. Turn on "Start with Windows" in its menu.
@@ -72,6 +93,7 @@ echo      for this folder, then run the installer again.
 goto end
 :swapfail
 del "%NEW%" >nul 2>&1
+del "%OLD%" >nul 2>&1
 echo ERROR Could not replace "%EXE%": it is still in use. Restarting the installed widget.
 if exist "%EXE%" start "" "%EXE%"
 goto end

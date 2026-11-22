@@ -87,6 +87,12 @@ func level(_ v: Double, _ th: (Double, Double)) -> Int {
     return v >= th.1 ? 2 : v >= th.0 ? 1 : 0
 }
 
+// A temperature's level, judged on the number shown: in °F that is the °F value against 176 / 194 (80 / 90 °C).
+func tempLevel(_ c: Double, _ f: Bool) -> Int {
+    guard c.isFinite else { return 0 }
+    return f ? level(c * 9 / 5 + 32, (176, 194)) : level(c, Thresholds.temp)
+}
+
 enum Fmt {
     static func temp(_ c: Double, _ f: Bool) -> String {
         guard c.isFinite else { return dash }
@@ -101,8 +107,9 @@ enum Fmt {
         guard bps.isFinite else { return dash }
         let units = ["B/s", "KB/s", "MB/s", "GB/s"]
         var v = max(0, bps), i = 0
-        while v >= 1000 && i < units.count - 1 { v /= 1024; i += 1 }
-        return (v < 10 && i > 0 ? String(format: "%.1f", v) : "\(Int(v.rounded()))") + " " + units[i]
+        // Roll over at the value shown, so 999.6 B/s reads "1.0 KB/s", never "1000 B/s".
+        while v >= 999.5 && i < units.count - 1 { v /= 1024; i += 1 }
+        return (v < 9.95 && i > 0 ? String(format: "%.1f", v) : "\(Int(v.rounded()))") + " " + units[i]
     }
 
     /// The pill's 4-character rate: 0K, 999K, 1.0M, 9.9M, 10M, 999M, 1.0G (1024-based, per second).
@@ -116,7 +123,7 @@ enum Fmt {
 
     static func gb(_ g: Double) -> String {
         guard g.isFinite else { return dash }
-        return (g < 10 ? String(format: "%.1f", g) : "\(Int(g.rounded()))") + " GB"
+        return (g < 9.95 ? String(format: "%.1f", g) : "\(Int(g.rounded()))") + " GB"
     }
 }
 
@@ -174,7 +181,7 @@ private func metric(_ label: String, _ v: Double, _ th: (Double, Double), _ c: (
 func buildCells(_ s: Snapshot, fahrenheit: Bool = false, fourth: Fourth = .auto, download: Bool = false, palette p: Palette = .darkTheme) -> [Cell] {
     var tc = s.cpuTempC, label = "TEMP"
     if !tc.isFinite && s.gpuTempC.isFinite { tc = s.gpuTempC; label = "GPU\u{00B0}" }
-    let tcol = tempColor(tc), tl = level(tc, Thresholds.temp)
+    let tcol = tempColor(tc), tl = tempLevel(tc, fahrenheit)
     var cells = [Cell(label: label, value: Fmt.temp(tc, fahrenheit), frac: tc.isFinite ? (tc - 30) / 70 : .nan,
                       bar1: barTone(tempColor(35), p), bar2: barTone(tcol, p), labelColor: labelTint(tcol, p),
                       valueColor: tl > 0 ? valueColor(tl, p) : (p.dark ? tcol.lighten(0.45) : tcol.darken(0.45)), level: tl)]
@@ -216,7 +223,7 @@ private func heat(_ r: CardRow, _ lvl: Int) -> CardRow {
 
 func cardRows(_ s: Snapshot, fahrenheit: Bool = false, palette p: Palette = .darkTheme) -> [CardRow] {
     var rows: [CardRow] = []
-    let tc = tempColor(s.cpuTempC), tl = level(s.cpuTempC, Thresholds.temp)
+    let tc = tempColor(s.cpuTempC), tl = tempLevel(s.cpuTempC, fahrenheit)
     let tsub = s.cpuTempC.isFinite ? "CPU \u{00B7} \(s.cpuTempSource.isEmpty ? "sensor" : s.cpuTempSource)"
         : s.thermalState.isEmpty ? "No CPU temperature sensor found" : "Thermal state: \(s.thermalState)"
     rows.append(CardRow(title: "Temperature", sub: tsub, value: s.cpuTempC.isFinite ? Fmt.tempLong(s.cpuTempC, fahrenheit) : (s.thermalState.isEmpty ? dash : s.thermalState),
@@ -405,6 +412,15 @@ func coreSelfTest() -> (passed: Int, failed: Int) {
     // TC-135: the colour matches the number shown.
     check("TC-135 level: 74.6 % CPU shows 75% in amber", Fmt.pct(74.6) == "75%" && level(74.6, Thresholds.cpu) == 1)
     check("TC-135 level: 89.6 % RAM shows 90% in red", Fmt.pct(89.6) == "90%" && level(89.6, Thresholds.ram) == 2)
+    // QA-01: in °F the colour is judged on the °F number shown, so two readings that both show 175° look the same.
+    var f1 = Snapshot(); f1.cpuTempC = 79.4
+    var f2 = Snapshot(); f2.cpuTempC = 79.6
+    let c1 = buildCells(f1, fahrenheit: true)[0], c2 = buildCells(f2, fahrenheit: true)[0]
+    check("QA-01 level: 79.4 and 79.6 C both show 175 F and share one colour", c1.value == "175\u{00B0}" && c2.value == "175\u{00B0}" && c1.level == 0 && c2.level == 0)
+    check("QA-01 level: 176 F is amber, 194 F is red", tempLevel(80, true) == 1 && tempLevel(90, true) == 2 && tempLevel(89.6, false) == 2)
+    // QA-02: the card's rates and sizes roll over at the shown value: never "1000 KB/s" or "10.0 GB".
+    check("QA-02 fmt: rate rolls over at the shown value", Fmt.rate(1023999) == "1.0 MB/s" && Fmt.rate(999.6) == "1.0 KB/s" && Fmt.rate(10199) == "10 KB/s" && Fmt.rate(9.94 * 1024) == "9.9 KB/s" && Fmt.rate(999) == "999 B/s")
+    check("QA-02 fmt: 9.96 GB shows 10 GB", Fmt.gb(9.96) == "10 GB" && Fmt.gb(9.94) == "9.9 GB")
     // TC-137: a counter that restarts is not a 4 GB wrap; a real wrap still counts.
     check("TC-137 net: restarted counter adds only its new bytes", netDelta(["en0": (5_000_000, 0)], ["en0": (1_000, 0)]).rx == 1_000)
     check("TC-137 net: 32-bit wrap still counted", counterDelta(4_294_967_000, 200) == 496)
