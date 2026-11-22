@@ -8,8 +8,8 @@ echo Removing HW Widget...
 taskkill /IM HWWidget.exe /F >nul 2>&1
 set "EXE=%APPDIR%\HWWidget.exe"
 if exist "%EXE%" goto run
-set "EXE=%DIR%\HWWidget.exe"
-if exist "%EXE%" goto run
+rem The exe in the old folder (versions up to 1.2.1) never runs here: 1.0 and 1.1 ignore --uninstall and would just
+rem open the widget. The exe below removes the startup entries of every version, and the old folder goes at the end.
 set "EXE=%~dp0windows\bin\HWWidget.exe"
 if exist "%EXE%" goto run
 rem The installed exe is gone (for example removed by an antivirus): build a temporary one from this folder.
@@ -20,6 +20,9 @@ if errorlevel 1 goto manual
 :run
 start "" /wait "%EXE%" --uninstall
 set "RC=%errorlevel%"
+rem 0 = removed. Any other code runs the cleanup below: 5 can be the widget's "helper still installed" or a start
+rem Windows refused ("Access is denied"), and the cleanup is safe to repeat. It sets 5 again while the helper is there.
+if not "%RC%"=="0" goto manual
 goto files
 :manual
 set "RC=0"

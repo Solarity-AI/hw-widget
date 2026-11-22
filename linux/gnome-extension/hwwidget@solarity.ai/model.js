@@ -19,12 +19,12 @@ export const COLORS = {
 export const PALETTES = {
     dark: {
         bg1: '#2A2A40', bg2: '#18182A', text: '#F8FAFC', sub: '#A5ABC3',
-        track: [1, 1, 1, 0.14], sep: [1, 1, 1, 0.12], warn: '#FCD34D', crit: '#FF8FA3',
+        track: [1, 1, 1, 0.14], sep: [1, 1, 1, 0.12], warn: '#FCD34D', crit: '#FF8FA3', pinned: '#A78BFA',
         card1: '#26263B', card2: '#15151F', edge: [0, 0, 0, 0.27], borderAlpha: 0.69, dark: true,
     },
     light: {
         bg1: '#FFFFFF', bg2: '#EEF1F8', text: '#111827', sub: '#5B6478',
-        track: [0.07, 0.09, 0.15, 0.18], sep: [0.07, 0.09, 0.15, 0.12], warn: '#B45309', crit: '#E11D48',
+        track: [0.07, 0.09, 0.15, 0.18], sep: [0.07, 0.09, 0.15, 0.12], warn: '#92400E', crit: '#BE123C', pinned: '#6D28D9',
         card1: '#FFFFFF', card2: '#F3F5FB', edge: [0.06, 0.09, 0.16, 0.13], borderAlpha: 0.92, dark: false,
     },
 };
@@ -111,7 +111,8 @@ export const fmt = {
     },
 };
 
-const labelTint = (accent, p) => (p.dark ? lighten(accent, 0.2) : darken(accent, 0.22));
+// Light labels and values are darkened enough for 4.5:1 text contrast on the light pill and card.
+export const labelTint = (accent, p) => (p.dark ? lighten(accent, 0.2) : darken(accent, 0.5));
 const barTone = (c, p) => (p.dark ? c : darken(c, 0.1));
 const valueColor = (lvl, p) => (lvl === 2 ? p.crit : lvl === 1 ? p.warn : p.text);
 
@@ -162,7 +163,7 @@ export function buildCells(s, {fahrenheit = false, fourth = 'auto', download = f
         bar1: barTone(tempColor(35), p),
         bar2: barTone(tcol, p),
         labelColor: labelTint(tcol, p),
-        valueColor: tl > 0 ? valueColor(tl, p) : (p.dark ? lighten(tcol, 0.45) : darken(tcol, 0.45)),
+        valueColor: tl > 0 ? valueColor(tl, p) : (p.dark ? lighten(tcol, 0.45) : darken(tcol, 0.5)),
         level: tl,
     }];
     cells.push(metric('CPU', s.cpuPercent, THRESHOLDS.cpu, COLORS.cpu, p));
@@ -197,7 +198,7 @@ export function cardRows(s, {fahrenheit = false, palette = PALETTES.dark} = {}) 
         sub: Number.isFinite(s.cpuTempC) ? `CPU · ${s.cpuTempSource || 'sensor'}` : 'No CPU temperature sensor found',
         value: fmt.tempLong(s.cpuTempC, fahrenheit),
         frac: (s.cpuTempC - 30) / 70, a: tempColor(35), b: tc, dot: tc,
-        valueColor: tl > 0 ? valueColor(tl, p) : (p.dark ? lighten(tc, 0.35) : darken(tc, 0.45)),
+        valueColor: tl > 0 ? valueColor(tl, p) : (p.dark ? lighten(tc, 0.35) : darken(tc, 0.5)),
     });
     rows.push(heat({
         title: 'CPU', sub: s.cpuName || 'Processor', value: fmt.pct(s.cpuPercent), frac: s.cpuPercent / 100,

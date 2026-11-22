@@ -108,7 +108,7 @@ namespace HwWidget
                 p.Bg1 = Hex("#FFFFFF"); p.Bg2 = Hex("#EEF1F8");
                 p.Text = Hex("#111827"); p.SubText = Hex("#5B6478");
                 p.Track = Color.FromArgb(46, 17, 24, 39); p.Sep = Color.FromArgb(30, 17, 24, 39);
-                p.Warn = Hex("#B45309"); p.Crit = Hex("#E11D48");
+                p.Warn = Hex("#92400E"); p.Crit = Hex("#BE123C");   // 4.5:1 or more on every light background
                 p.CardBg1 = Hex("#FFFFFF"); p.CardBg2 = Hex("#F3F5FB");
                 p.Shadow = Hex("#1E293B"); p.BorderAlpha = 235; p.Edge = Color.FromArgb(34, 15, 23, 42);
             }
@@ -130,11 +130,11 @@ namespace HwWidget
         public const float CardW = 300, CardMargin = 14;
 
         // Metric colours: bar gradient + label tint for dark and light taskbars.
-        static readonly Color CpuA = Palette.Hex("#38BDF8"), CpuB = Palette.Hex("#818CF8");
-        static readonly Color RamA = Palette.Hex("#C084FC"), RamB = Palette.Hex("#F472B6");
-        static readonly Color GpuA = Palette.Hex("#4ADE80"), GpuB = Palette.Hex("#2DD4BF");
-        static readonly Color DskA = Palette.Hex("#FBBF24"), DskB = Palette.Hex("#F97316");
-        static readonly Color NetA = Palette.Hex("#60A5FA"), NetB = Palette.Hex("#A78BFA");
+        internal static readonly Color CpuA = Palette.Hex("#38BDF8"), CpuB = Palette.Hex("#818CF8");
+        internal static readonly Color RamA = Palette.Hex("#C084FC"), RamB = Palette.Hex("#F472B6");
+        internal static readonly Color GpuA = Palette.Hex("#4ADE80"), GpuB = Palette.Hex("#2DD4BF");
+        internal static readonly Color DskA = Palette.Hex("#FBBF24"), DskB = Palette.Hex("#F97316");
+        internal static readonly Color NetA = Palette.Hex("#60A5FA"), NetB = Palette.Hex("#A78BFA");
 
         static readonly double[] RampT = { 35, 50, 65, 75, 85, 95 };
         static readonly Color[] RampC = { Palette.Hex("#22D3EE"), Palette.Hex("#34D399"), Palette.Hex("#A3E635"),
@@ -158,7 +158,9 @@ namespace HwWidget
         static Color Lighten(Color c, double t) { return Lerp(c, Color.FromArgb(c.A, 255, 255, 255), t); }
         static Color Alpha(Color c, int a) { return Color.FromArgb(Math.Max(0, Math.Min(255, a)), c.R, c.G, c.B); }
 
-        static Color LabelTint(Color accent, Palette p) { return p.Dark ? Lighten(accent, 0.2) : Darken(accent, 0.22); }
+        // Light-mode text colours are darkened by half, so every one reaches 4.5:1 on the light backgrounds.
+        internal static Color LabelTint(Color accent, Palette p) { return p.Dark ? Lighten(accent, 0.2) : Darken(accent, 0.5); }
+        internal static Color PinnedColor(Palette p) { return p.Dark ? Palette.Hex("#A78BFA") : Palette.Hex("#6D28D9"); }
         static Color BarTone(Color c, Palette p) { return p.Dark ? c : Darken(c, 0.1); }
 
         static Color ValueColor(int level, Palette p) { return level == 2 ? p.Crit : level == 1 ? p.Warn : p.Text; }
@@ -192,7 +194,7 @@ namespace HwWidget
             t.Bar1 = BarTone(TempColor(35), p); t.Bar2 = BarTone(tcol, p);
             t.Level = Fmt.TempLevel(tc, fahrenheit);
             t.LabelColor = LabelTint(tcol, p);
-            t.ValueColor = t.Level > 0 ? ValueColor(t.Level, p) : (p.Dark ? Lighten(tcol, 0.45) : Darken(tcol, 0.45));
+            t.ValueColor = t.Level > 0 ? ValueColor(t.Level, p) : (p.Dark ? Lighten(tcol, 0.45) : Darken(tcol, 0.5));
             cells.Add(t);
 
             cells.Add(Metric("CPU", s.CpuPercent, 75, 90, CpuA, CpuB, p));
@@ -263,18 +265,43 @@ namespace HwWidget
             }
         }
 
-        static Font F(float px, FontStyle st) { return new Font(FontName, px, st, GraphicsUnit.Pixel); }
+        // Fonts and string formats are made once and kept: fonts are sized in DIP and scaled by the Graphics
+        // transform, so a DPI or theme change needs no new ones. Drawing happens on the UI thread only.
+        internal static int FontsMade, FormatsMade;
+        static readonly Dictionary<string, Font> fonts = new Dictionary<string, Font>();
+        static Font F(float px, FontStyle st)
+        {
+            string key = px.ToString("R", CultureInfo.InvariantCulture) + "|" + (int)st;
+            Font f;
+            if (!fonts.TryGetValue(key, out f)) { f = new Font(FontName, px, st, GraphicsUnit.Pixel); fonts[key] = f; FontsMade++; }
+            return f;
+        }
 
+        // Everything the pill's image depends on: the same key draws the same pixels, so the repaint can be skipped.
+        internal static string PillKey(Cell[] cells, Palette p, float scale, bool hover)
+        {
+            System.Text.StringBuilder k = new System.Text.StringBuilder();
+            k.Append(p.Dark ? 'D' : 'L').Append('|').Append(scale.ToString("R", CultureInfo.InvariantCulture)).Append('|').Append(hover ? 'H' : '-');
+            foreach (Cell c in cells)
+                k.Append('|').Append(c.Label).Append('/').Append(c.Value).Append('/').Append(double.IsNaN(c.Frac) ? "-" : c.Frac.ToString("0.000", CultureInfo.InvariantCulture))
+                 .Append('/').Append(c.Level).Append('/').Append(c.Bar1.ToArgb()).Append('/').Append(c.Bar2.ToArgb())
+                 .Append('/').Append(c.LabelColor.ToArgb()).Append('/').Append(c.ValueColor.ToArgb());
+            return k.ToString();
+        }
+
+        static readonly StringFormat[] formats = new StringFormat[3];   // by StringAlignment: Near, Center, Far
         static void Text(Graphics g, string s, Font f, Color c, RectangleF r, StringAlignment h)
         {
-            using (StringFormat sf = new StringFormat(StringFormat.GenericTypographic))
-            using (SolidBrush b = new SolidBrush(c))
+            StringFormat sf = formats[(int)h];
+            if (sf == null)
             {
+                sf = new StringFormat(StringFormat.GenericTypographic);
                 sf.Alignment = h; sf.LineAlignment = StringAlignment.Center;
                 sf.Trimming = StringTrimming.EllipsisCharacter;
                 sf.FormatFlags |= StringFormatFlags.NoWrap | StringFormatFlags.MeasureTrailingSpaces;
-                g.DrawString(s, f, b, r, sf);
+                formats[(int)h] = sf; FormatsMade++;
             }
+            using (SolidBrush b = new SolidBrush(c)) g.DrawString(s, f, b, r, sf);
         }
 
         static void Bar(Graphics g, RectangleF r, double frac, Color a, Color b, Palette p)
@@ -358,8 +385,7 @@ namespace HwWidget
                     using (Pen pen = new Pen(bb, 1.3f)) g.DrawPath(pen, path);
                 }
 
-                using (Font lf = F(8.6f, FontStyle.Bold))
-                using (Font vf = F(13f, FontStyle.Bold))
+                Font lf = F(8.6f, FontStyle.Bold), vf = F(13f, FontStyle.Bold);   // kept by F, never disposed here
                 using (Pen sep = new Pen(p.Sep, 1f))
                 {
                     for (int i = 0; i < cells.Length; i++)
@@ -378,7 +404,7 @@ namespace HwWidget
         }
 
         // ------------------------------------------------------------------ the hover card
-        sealed class Row
+        internal sealed class Row
         {
             public string Title, Sub, Value; public double Frac; public Color A, B, ValueColor, Dot;
         }
@@ -390,7 +416,21 @@ namespace HwWidget
             else if (level == 1) r.B = Palette.Hex("#F59E0B");
         }
 
-        static List<Row> CardRows(HwSnapshot s, bool f, Palette p)
+        // What a screen reader announces for the card, row by row in the pill's wording style:
+        // "Temperature 61°C (CPU, ACPI thermal zone CPUZ), CPU 23% (...), ..., Network 178 KB/s download (21 KB/s upload)".
+        internal static string CardAccessibleText(HwSnapshot s, bool f)
+        {
+            List<string> parts = new List<string>();
+            foreach (Row r in CardRows(s, f, Palette.For(true)))
+            {
+                string value = r.Value.StartsWith("↓ ") ? r.Value.Substring(2) + " download" : r.Value;
+                string sub = (r.Sub ?? "").Replace("↑ ", "").Replace(" · ", ", ");
+                parts.Add((r.Title + " " + value + (sub.Length > 0 ? " (" + sub + ")" : "")).Replace(Fmt.Dash, "unknown"));
+            }
+            return string.Join(", ", parts.ToArray());
+        }
+
+        internal static List<Row> CardRows(HwSnapshot s, bool f, Palette p)
         {
             List<Row> rows = new List<Row>();
             Row r;
@@ -401,7 +441,7 @@ namespace HwWidget
             r.Frac = double.IsNaN(s.CpuTempC) ? double.NaN : (s.CpuTempC - 30) / 70.0;
             r.A = TempColor(35); r.B = TempColor(s.CpuTempC); r.Dot = r.B;
             int tl = Fmt.TempLevel(s.CpuTempC, f);
-            r.ValueColor = tl > 0 ? ValueColor(tl, p) : (p.Dark ? Lighten(r.B, 0.35) : Darken(r.B, 0.45));
+            r.ValueColor = tl > 0 ? ValueColor(tl, p) : (p.Dark ? Lighten(r.B, 0.35) : Darken(r.B, 0.5));
             rows.Add(r);
 
             r = new Row(); r.Title = "CPU"; r.Sub = s.CpuName; r.Value = Fmt.Pct(s.CpuPercent);
@@ -466,17 +506,14 @@ namespace HwWidget
                 }
 
                 float x = card.X + 16, w = card.Width - 32, y = card.Y + 10;
-                using (Font hf = F(14f, FontStyle.Bold))
-                using (Font tf = F(12.5f, FontStyle.Bold))
-                using (Font sf = F(11f, FontStyle.Regular))
-                using (Font vf = F(15f, FontStyle.Bold))
-                using (Font ff = F(10.5f, FontStyle.Regular))
+                Font hf = F(14f, FontStyle.Bold), tf = F(12.5f, FontStyle.Bold), sf = F(11f, FontStyle.Regular),
+                     vf = F(15f, FontStyle.Bold), ff = F(10.5f, FontStyle.Regular);   // kept by F, never disposed here
                 {
                     // header: rainbow dot + title + pin state
                     using (LinearGradientBrush db = new LinearGradientBrush(new RectangleF(x, y + 9, 12, 12), Palette.Hex("#22D3EE"), Palette.Hex("#F472B6"), 45f))
                         g.FillEllipse(db, x, y + 9, 12, 12);
                     Text(g, "Hardware", hf, p.Text, new RectangleF(x + 20, y + 3, 150, 24), StringAlignment.Near);
-                    Text(g, pinned ? "Pinned" : "Live", ff, pinned ? Palette.Hex("#A78BFA") : p.SubText, new RectangleF(x + w - 120, y + 3, 120, 24), StringAlignment.Far);
+                    Text(g, pinned ? "Pinned" : "Live", ff, pinned ? PinnedColor(p) : p.SubText, new RectangleF(x + w - 120, y + 3, 120, 24), StringAlignment.Far);
                     y = card.Y + HeadH;
 
                     foreach (Row r in rows)

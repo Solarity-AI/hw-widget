@@ -29,6 +29,7 @@ namespace HwWidget
         volatile HwSnapshot last = new HwSnapshot();
         bool dark = true, hover, pinned, hiddenForShell = true, mouseDown, dragging;
         float scale = 1f;
+        string drawnKey;   // Painter.PillKey of the pill on screen
         int ticks, hoverTicks, leaveTicks, dragStartX, dragOrigX, trayLeft;
         Native.RECT tb, mon, work;
         Point pos;
@@ -103,7 +104,13 @@ namespace HwWidget
             if (spoken != AccessibleName) { AccessibleName = spoken; Text = "HW Widget: " + spoken; }
             if (!hiddenForShell)
             {
-                using (Bitmap b = Painter.Pill(cells, Palette.For(dark), scale, hover || dragging)) Present(b, pos.X, pos.Y);
+                // A pill that would look the same in the same place is not drawn again.
+                string key = Painter.PillKey(cells, Palette.For(dark), scale, hover || dragging);
+                if (key != drawnKey || Placed.X != pos.X || Placed.Y != pos.Y)
+                {
+                    using (Bitmap b = Painter.Pill(cells, Palette.For(dark), scale, hover || dragging)) Present(b, pos.X, pos.Y);
+                    drawnKey = key;
+                }
                 if (!Native.IsWindowVisible(Handle)) ShowQuiet();
             }
             if (card.Shown2) ShowCard();
@@ -138,7 +145,7 @@ namespace HwWidget
             if (hide != hiddenForShell)
             {
                 hiddenForShell = hide;
-                if (hide) { HideQuiet(); card.HideQuiet(); pinned = false; }
+                if (hide) { HideQuiet(); card.HideQuiet(); pinned = false; drawnKey = null; }
             }
             if (!hide)
             {
@@ -252,6 +259,9 @@ namespace HwWidget
         void ShowCard()
         {
             if (hiddenForShell) return;
+            // A screen reader hears the card's rows, not only its name; the pill keeps its own text.
+            string spoken = Painter.CardAccessibleText(last, cfg.Fahrenheit);
+            if (spoken != card.AccessibleName) { card.AccessibleName = spoken; card.Text = "HW Widget details: " + spoken; }
             using (Bitmap b = Painter.Card(last, cfg.Fahrenheit, Palette.For(dark), scale, pinned))
             {
                 int m = (int)Math.Round(Painter.CardMargin * scale), gap = (int)Math.Round(6 * scale);

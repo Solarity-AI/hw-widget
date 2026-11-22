@@ -30,25 +30,27 @@ namespace HwWidget
 
         public static Settings Load()
         {
-            Settings s = new Settings();
             // Celsius by default everywhere; Fahrenheit only when chosen in the menu.
-            try
-            {
-                if (!File.Exists(FilePath)) return s;
-                foreach (string line in File.ReadAllLines(FilePath))
-                {
-                    int eq = line.IndexOf('=');
-                    if (eq <= 0) continue;
-                    string k = line.Substring(0, eq).Trim().ToLowerInvariant(), v = line.Substring(eq + 1).Trim();
-                    int n;
-                    if (k == "interval" && int.TryParse(v, out n) && (n == 1 || n == 2 || n == 5)) s.IntervalSec = n;
-                    else if (k == "unit") s.Fahrenheit = v.ToUpperInvariant() == "F";
-                    else if (k == "fourth") s.FourthMetric = v == "gpu" ? Fourth.Gpu : v == "disk" ? Fourth.Disk : Fourth.Auto;
-                    else if (k == "offset" && int.TryParse(v, out n)) s.OffsetFromRight = n;
-                    else if (k == "download") s.Download = v.ToLowerInvariant() != "off";
-                }
-            }
+            try { if (File.Exists(FilePath)) return Parse(File.ReadAllLines(FilePath)); }
             catch { }
+            return new Settings();
+        }
+
+        internal static Settings Parse(IEnumerable<string> lines)
+        {
+            Settings s = new Settings();
+            foreach (string line in lines)
+            {
+                int eq = line.IndexOf('=');
+                if (eq <= 0) continue;
+                string k = line.Substring(0, eq).Trim().ToLowerInvariant(), v = line.Substring(eq + 1).Trim();
+                int n;
+                if (k == "interval" && int.TryParse(v, out n) && (n == 1 || n == 2 || n == 5)) s.IntervalSec = n;
+                else if (k == "unit") s.Fahrenheit = v.ToUpperInvariant() == "F";
+                else if (k == "fourth") { string lv = v.ToLowerInvariant(); s.FourthMetric = lv == "gpu" ? Fourth.Gpu : lv == "disk" ? Fourth.Disk : Fourth.Auto; }
+                else if (k == "offset" && int.TryParse(v, out n)) s.OffsetFromRight = n;
+                else if (k == "download") s.Download = v.ToLowerInvariant() != "off";
+            }
             return s;
         }
 

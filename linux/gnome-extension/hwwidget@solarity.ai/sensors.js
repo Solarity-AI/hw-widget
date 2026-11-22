@@ -140,17 +140,17 @@ const CPU_CHIPS = [
 ];
 
 // chips: [{name, temps: [{label, c}]}] ; zones: [{type, c}]  ->  {c, source} | null
+// A 2-socket PC has 1 chip per CPU package, so the hottest reading of the best label across all chips with
+// that name is shown: TEMP warns about heat.
 export function pickCpuTemp(chips, zones) {
     const ok = c => Number.isFinite(c) && c > 5 && c < 125;
     for (const [name, pref] of CPU_CHIPS) {
-        for (const chip of chips.filter(x => x.name === name)) {
-            const temps = chip.temps.filter(t => ok(t.c));
-            if (!temps.length) continue;
-            const prefs = pref ? [].concat(pref) : [];
-            const hit = prefs.map(re => temps.find(t => re.test(t.label || ''))).find(Boolean);
-            const t = hit || temps.reduce((a, b) => (b.c > a.c ? b : a));
-            return {c: t.c, source: `${name}${t.label ? ` ${t.label}` : ''}`};
-        }
+        const temps = chips.filter(x => x.name === name).flatMap(x => x.temps.filter(t => ok(t.c)));
+        if (!temps.length) continue;
+        const prefs = pref ? [].concat(pref) : [];
+        const hits = prefs.map(re => temps.filter(t => re.test(t.label || ''))).find(h => h.length);
+        const t = (hits || temps).reduce((a, b) => (b.c > a.c ? b : a));
+        return {c: t.c, source: `${name}${t.label ? ` ${t.label}` : ''}`};
     }
     const zonePref = [/x86_pkg_temp/, /cpu/i, /soc/i, /acpitz/];
     for (const re of zonePref) {
@@ -172,9 +172,13 @@ export function parseNvidiaLine(line) {
 }
 
 // ---------------------------------------------------------------- the sampler
+const NV_LOOP_MS = 2000;     // the nvidia-smi stream prints a line this often
+const NV_QUERY_MS = 10000;   // a one-shot query still running after this is stopped
+
 export class Sampler {
-    // smi: path of nvidia-smi (default: from PATH); clock: ms timestamps, injectable for tests.
-    constructor({root = '/', nvidia = true, smi = null, clock = () => Date.now()} = {}) {
+    // smi: path of nvidia-smi (default: from PATH); clock: ms timestamps, injectable for tests. The default
+    // clock is monotonic, so a wall-clock step (NTP, a dual-boot clock) never stretches or skips a timer.
+    constructor({root = '/', nvidia = true, smi = null, clock = () => GLib.get_monotonic_time() / 1000} = {}) {
         this._clock = clock;
         this.root = root.endsWith('/') ? root : `${root}/`;
         this._prevCpu = null;
@@ -191,13 +195,39 @@ export class Sampler {
         return this.root + rel;
     }
 
+    // NVIDIA display devices, listed once.
+    _nvidiaDevices() {
+        const base = this._p('sys/bus/pci/devices');
+        this._nvDevs ||= listDir(base).filter(d => (readText(`${base}/${d}/vendor`) || '').trim() === '0x10de' &&
+            (readText(`${base}/${d}/class`) || '').trim().startsWith('0x03')).map(d => `${base}/${d}`);
+        return this._nvDevs;
+    }
+
     // Runtime-PM status files of NVIDIA display devices that may sleep. Reading them never wakes the GPU.
     _nvidiaPm() {
-        const base = this._p('sys/bus/pci/devices');
-        return listDir(base).filter(d => (readText(`${base}/${d}/vendor`) || '').trim() === '0x10de' &&
-            (readText(`${base}/${d}/class`) || '').trim().startsWith('0x03') &&
-            (readText(`${base}/${d}/power/control`) || '').trim() === 'auto')
-            .map(d => `${base}/${d}/power/runtime_status`);
+        return this._nvidiaDevices().filter(d => (readText(`${d}/power/control`) || '').trim() === 'auto')
+            .map(d => `${d}/power/runtime_status`);
+    }
+
+    // TLP and similar tools switch power/control with the power source, so each rescan checks it again: a GPU
+    // that may sleep now gets the short queries instead of the stream (which would keep it awake), and back.
+    _nvidiaModeCheck() {
+        if (!this._smi || this._nvCancel?.is_cancelled()) return;
+        const pm = this._nvidiaPm();
+        if (pm.length && !this._nvPm.length) {
+            const proc = this._nvProc;
+            this._nvProc = null;
+            this._nvRestartAt = 0;
+            try {
+                proc?.force_exit();
+            } catch {}
+            this._nvNext = 0;
+            this._nvAwakeSince = 0;
+        } else if (!pm.length && this._nvPm.length) {
+            this._nvFails = 0;
+            this._spawnNvidiaStream();
+        }
+        this._nvPm = pm;
     }
 
     _startNvidia(smi) {
@@ -218,12 +248,15 @@ export class Sampler {
     }
 
     // 1 long-lived nvidia-smi that prints a line every 2 s. When it exits (GPU reset, driver reload, NVML
-    // error), sample() starts it again after 10 s, then every 60 s while it keeps exiting without a reading.
+    // error) or stops printing, sample() starts it again after 10 s, then every 60 s while it keeps failing
+    // without a reading.
     _spawnNvidiaStream() {
         this._nvRestartAt = 0;
+        this._nvLineAt = this._clock();
+        this._nvLineSeen = false;
         try {
             this._nvProc = Gio.Subprocess.new(
-                [this._smi, '--query-gpu=index,utilization.gpu,temperature.gpu,memory.used,name', '--format=csv,noheader,nounits', '-lms', '2000'],
+                [this._smi, '--query-gpu=index,utilization.gpu,temperature.gpu,memory.used,name', '--format=csv,noheader,nounits', '-lms', `${NV_LOOP_MS}`],
                 Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE);
             const stream = new Gio.DataInputStream({base_stream: this._nvProc.get_stdout_pipe(), close_base_stream: true});
             this._readNvidia(stream, this._nvProc);
@@ -250,6 +283,10 @@ export class Sampler {
                 this._nvidiaEnded(proc);
                 return;
             }
+            if (proc === this._nvProc) {
+                this._nvLineAt = this._clock();
+                this._nvLineSeen = true;
+            }
             const g = parseNvidiaLine(line);
             if (g) {
                 g.at = this._clock();
@@ -263,29 +300,48 @@ export class Sampler {
     // Sleep-aware polling for GPUs with runtime power management (see _startNvidia).
     _pollNvidia(now) {
         if (!this._smi || !this._nvPm?.length) return;
+        // A query that hangs (NVML blocked after a GPU fault) is stopped, so the next one can run 30 s later.
+        if (this._nvBusy && now - this._nvQueryAt >= NV_QUERY_MS) {
+            try {
+                this._nvQuery?.force_exit();
+            } catch {}
+            this._nvQuery = null;
+            this._nvBusy = false;
+            this._nvOk = false;
+        }
         if (this._nvPm.every(f => (readText(f) || '').trim() === 'suspended')) {
             if (!this._nvidia.size) this._nvidia.set(0, {index: 0, name: 'NVIDIA GPU', integrated: false});
             for (const g of this._nvidia.values())
                 Object.assign(g, {percent: 0, tempC: NaN, memUsedGB: NaN, asleep: true, at: now});
             this._nvAwakeSince = 0;
+            this._nvOk = true;
             return;
         }
         this._nvAwakeSince ||= now;
         // Between queries an awake GPU keeps its last reading (0 % right after sleep), so the pill does not
-        // flip between GPU and DISK. The very first reading is taken at once to learn the GPU's name.
-        for (const g of this._nvidia.values()) Object.assign(g, {asleep: false, at: now});
+        // flip between GPU and DISK; after a failed query it ages out (maxAge) instead of looking live.
+        // The very first reading is taken at once to learn the GPU's name.
+        for (const g of this._nvidia.values()) {
+            g.asleep = false;
+            if (this._nvOk) g.at = now;
+        }
         // Only 1 query skips the waits, even when it brings no reading (a failing nvidia-smi).
         const first = !this._nvQueried && !this._nvidia.size;
         if (this._nvBusy || (!first && (now < this._nvNext || now - this._nvAwakeSince < 25000))) return;
         this._nvQueried = true;
         this._nvBusy = true;
+        this._nvQueryAt = now;
         this._nvNext = now + 30000;
         try {
             const proc = Gio.Subprocess.new(
                 [this._smi, '--query-gpu=index,utilization.gpu,temperature.gpu,memory.used,name', '--format=csv,noheader,nounits'],
                 Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE);
+            this._nvQuery = proc;
             proc.communicate_utf8_async(null, this._nvCancel, (pr, res) => {
+                if (proc !== this._nvQuery) return;   // stopped after NV_QUERY_MS
+                this._nvQuery = null;
                 this._nvBusy = false;
+                let ok = false;
                 try {
                     const [, out] = pr.communicate_utf8_finish(res);
                     for (const line of (out || '').split('\n')) {
@@ -293,12 +349,15 @@ export class Sampler {
                         if (g) {
                             g.at = this._clock();
                             this._nvidia.set(g.index, g);
+                            ok = true;
                         }
                     }
                 } catch {}
+                this._nvOk = ok;
             });
         } catch {
             this._nvBusy = false;
+            this._nvOk = false;
         }
     }
 
@@ -310,20 +369,27 @@ export class Sampler {
         const th = this._p('sys/class/thermal');
         const drm = this._p('sys/class/drm');
         const net = this._p('sys/class/net');
+        const cards = listDir(drm).filter(c => /^card\d+$/.test(c))
+            .filter(c => GLib.file_test(`${drm}/${c}/device/gpu_busy_percent`, GLib.FileTest.EXISTS))
+            .map(c => ({dir: `${drm}/${c}/device`, pm: `${drm}/${c}/device/power/runtime_status`,
+                hwmon: listDir(`${drm}/${c}/device/hwmon`).map(h => chipLayout(`${drm}/${c}/device/hwmon/${h}`))}));
+        // A card's own sensor is read with its card (and not while the card sleeps), never twice.
+        const own = new Set(cards.flatMap(c => c.hwmon.map(l => l.dir.split('/').pop())));
         this._topo = {
             until: now + 30000,
-            hwmon: listDir(hw).map(h => chipLayout(`${hw}/${h}`)),
+            hwmon: listDir(hw).filter(h => !own.has(h)).map(h => chipLayout(`${hw}/${h}`)),
             zones: listDir(th).filter(z => z.startsWith('thermal_zone')).map(z => ({dir: `${th}/${z}`, type: (readText(`${th}/${z}/type`) || '').trim()})),
-            cards: listDir(drm).filter(c => /^card\d+$/.test(c))
-                .filter(c => GLib.file_test(`${drm}/${c}/device/gpu_busy_percent`, GLib.FileTest.EXISTS))
-                .map(c => ({dir: `${drm}/${c}/device`, hwmon: listDir(`${drm}/${c}/device/hwmon`).map(h => chipLayout(`${drm}/${c}/device/hwmon/${h}`))})),
+            cards,
             phys: listDir(net).filter(n => GLib.file_test(`${net}/${n}/device`, GLib.FileTest.EXISTS)),
         };
+        this._nvidiaModeCheck();
         return this._topo;
     }
 
-    _rescanSoon() {
-        if (this._topo) this._topo.until = 0;
+    // A cached folder that is gone rescans at once; a file that exists but fails to read (a radio switched
+    // off) is skipped until the 30 s rescan.
+    _rescanSoon(dir) {
+        if (this._topo && !GLib.file_test(dir, GLib.FileTest.EXISTS)) this._topo.until = 0;
     }
 
     // Reads only the temperature inputs of a chip whose name and labels were read at the last rescan.
@@ -332,7 +398,7 @@ export class Sampler {
         for (const t of l.temps) {
             const raw = readText(t.input);
             if (raw === null) {
-                this._rescanSoon();
+                this._rescanSoon(l.dir);
                 continue;
             }
             temps.push({label: t.label, c: Number(raw.trim()) / 1000});
@@ -347,7 +413,7 @@ export class Sampler {
     _zones(topo) {
         return topo.zones.map(z => {
             const raw = readText(`${z.dir}/temp`);
-            if (raw === null) this._rescanSoon();
+            if (raw === null) this._rescanSoon(z.dir);
             return {type: z.type, c: Number((raw || '').trim()) / 1000};
         });
     }
@@ -355,9 +421,15 @@ export class Sampler {
     _amdGpus(chips, topo) {
         const out = [];
         for (const card of topo.cards) {
+            // A dGPU in runtime suspend is shown asleep and not read: on older kernels reading its busy,
+            // temperature or VRAM files wakes it (newer ones fail the read).
+            if ((readText(card.pm) || '').trim() === 'suspended') {
+                out.push({name: 'AMD Radeon GPU · asleep', percent: 0, tempC: NaN, memUsedGB: NaN, integrated: false, asleep: true});
+                continue;
+            }
             const busy = readText(`${card.dir}/gpu_busy_percent`);
             if (busy === null) {
-                this._rescanSoon();
+                this._rescanSoon(card.dir);
                 continue;
             }
             const g = {name: 'AMD Radeon GPU', percent: Number(busy.trim()), tempC: NaN, memUsedGB: NaN, integrated: false};
@@ -417,6 +489,15 @@ export class Sampler {
         this._prevNet = net;
         this._prevAt = now;
 
+        // A stream that stops printing (NVML blocked after a GPU fault) is stopped after 3 missed lines, so the
+        // back-off restarts it. Its first line may take longer while nvidia-smi starts up.
+        if (this._nvProc && now - this._nvLineAt > (this._nvLineSeen ? 3 : 5) * NV_LOOP_MS) {
+            const proc = this._nvProc;
+            try {
+                proc.force_exit();
+            } catch {}
+            this._nvidiaEnded(proc);
+        }
         if (this._nvRestartAt && now >= this._nvRestartAt) this._spawnNvidiaStream();
         this._pollNvidia(now);
         const maxAge = this._nvPm?.length ? 40000 : 10000;   // sleep-aware readings come at most every 30 s
@@ -441,7 +522,9 @@ export class Sampler {
         try {
             this._nvCancel?.cancel();
             this._nvProc?.force_exit();
+            this._nvQuery?.force_exit();
         } catch {}
         this._nvProc = null;
+        this._nvQuery = null;
     }
 }

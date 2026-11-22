@@ -93,7 +93,7 @@ for (const kind of ['intel', 'amd', 'arm', 'empty']) {
     write(root, 'proc/stat', 'cpu  130 0 130 840 0 0 0 0 0 0\n');   // +60 busy of +100 -> 60%
     write(root, 'proc/diskstats', '   8       0 sda 100 0 0 0 0 0 0 0 0 1000 0\n 259       0 nvme0n1 5 0 0 0 0 0 0 0 0 5600 0\n');
     write(root, 'proc/net/dev', '  eth0: 3000 1 0 0 0 0 0 0 900 0 0 0 0 0 0 0\n');
-    smp._prevAt = Date.now() - 2000;
+    smp._prevAt = smp._clock() - 2000;
     const s = smp.sample();
     smp.destroy();
     rmrf(root);
@@ -239,7 +239,7 @@ check('TC-127 net: bridge, bond and podman names skipped without /sys',
     const smp = new S.Sampler({root, nvidia: false});
     smp.sample();
     write(root, 'proc/net/dev', '  enp3s0: 3000 1 0 0 0 0 0 0 900\nmybridge: 3000 1 0 0 0 0 0 0 900\n');
-    smp._prevAt = Date.now() - 2000;
+    smp._prevAt = smp._clock() - 2000;
     const s = smp.sample();
     smp.destroy();
     rmrf(root);
@@ -288,6 +288,262 @@ check('TC-127 net: bridge, bond and podman names skipped without /sys',
     check('TC-131 nvidia: a failing query runs at most once per 30 s', n2 === 1, `${n2} calls in 20 s`);
     smp2.destroy();
     rmrf(root2);
+}
+
+// TC-252, TC-266 and TC-267: nvidia-smi that stops answering, a reading that stops updating, and a GPU whose
+// power/control changes with the power source (TLP).
+{
+    const wait = until => {
+        const ctx = GLib.MainContext.default(), end = GLib.get_monotonic_time() + 3_000_000;
+        while (!until() && GLib.get_monotonic_time() < end) ctx.iteration(false) || GLib.usleep(10000);
+    };
+    const nvRoot = (control, status) => {
+        const root = fakeRoot('intel');
+        const dev = 'sys/bus/pci/devices/0000:01:00.0';
+        if (control) {
+            write(root, `${dev}/vendor`, '0x10de\n');
+            write(root, `${dev}/class`, '0x030000\n');
+            write(root, `${dev}/power/control`, `${control}\n`);
+            write(root, `${dev}/power/runtime_status`, `${status}\n`);
+        }
+        return {root, dev, smi: `${root}/nvidia-smi`, calls: `${root}/smi-calls`};
+    };
+    const fakeSmi = (r, body) => {
+        write(r.root, 'nvidia-smi', `#!/bin/sh\necho "$*" >> '${r.calls}'\n${body}\n`);
+        GLib.spawn_command_line_sync(`chmod +x '${r.smi}'`);
+    };
+    const lines = r => (S.readText(r.calls) || '').split('\n').filter(Boolean);
+    let t = 1_000_000;
+
+    // A one-shot query that never returns.
+    const a = nvRoot('auto', 'active');
+    fakeSmi(a, 'exec sleep 30');
+    const smp = new S.Sampler({root: a.root, smi: a.smi, clock: () => t});
+    smp.sample();
+    wait(() => lines(a).length === 1);
+    check('TC-252 nvidia: the first one-shot query starts (and hangs)', smp._nvBusy === true && lines(a).length === 1, `${lines(a).length} calls`);
+    t += 12000; smp.sample();
+    check('TC-252 nvidia: a one-shot query that hangs is stopped after about 10 s', smp._nvBusy !== true && !smp._nvQuery, `busy ${smp._nvBusy}`);
+    t += 20000; smp.sample();
+    wait(() => lines(a).length === 2);
+    check('TC-252 nvidia: the next query runs 30 s after the hung one', lines(a).length === 2, `${lines(a).length} calls`);
+    smp.destroy();
+    rmrf(a.root);
+
+    // A stream that prints 1 line, then stops printing without exiting.
+    const b = nvRoot();
+    fakeSmi(b, "echo '0, 42, 61, 3000, NVIDIA RTX 4000 Ada Generation'\nexec sleep 30");
+    const smp2 = new S.Sampler({root: b.root, smi: b.smi, clock: () => t});
+    wait(() => smp2._nvidia.size);
+    let s = smp2.sample();
+    check('TC-252 nvidia: the stream reading is shown', s.gpuPercent === 42, `${s.gpuPercent}`);
+    for (let i = 0; i < 4; i++) {
+        t += 2000;
+        smp2.sample();
+    }
+    check('TC-252 nvidia: a stream that stops printing is stopped after 3 intervals', smp2._nvProc === null);
+    t += 10000; smp2.sample();
+    wait(() => lines(b).length === 2);
+    check('TC-252 nvidia: the stopped stream restarts with the back-off', lines(b).length === 2 && smp2._nvProc !== null, `${lines(b).length} calls`);
+    smp2.destroy();
+    rmrf(b.root);
+
+    // The first query reads 95 % / 83 C, every later one fails (driver updated without a reboot).
+    const c = nvRoot('auto', 'active');
+    fakeSmi(c, `if [ -e '${c.root}/done' ]; then echo 'Failed to initialize NVML: Driver/library version mismatch'; exit 18; fi\n` +
+        `touch '${c.root}/done'\necho '0, 95, 83, 7000, NVIDIA GeForce RTX 4070 Laptop GPU'`);
+    const smp3 = new S.Sampler({root: c.root, smi: c.smi, clock: () => t});
+    smp3.sample();
+    wait(() => !smp3._nvBusy);
+    s = smp3.sample();
+    check('TC-266 nvidia: the first query is shown', s.gpuPercent === 95 && s.gpuTempC === 83, `${s.gpuPercent} ${s.gpuTempC}`);
+    for (let i = 0; i < 60; i++) {
+        t += 2000;
+        s = smp3.sample();
+        wait(() => !smp3._nvBusy);
+    }
+    check('TC-266 nvidia: a reading with no successful query for 40 s drops out', s.gpus.length === 0, `${lines(c).length} calls, ${JSON.stringify(s.gpus)}`);
+    check('TC-266 nvidia: failing queries still run every 30 s', lines(c).length >= 4, `${lines(c).length} calls in 120 s`);
+    smp3.destroy();
+    rmrf(c.root);
+
+    // power/control "on" at log-in (on AC), "auto" after unplugging, "on" again.
+    const d = nvRoot('on', 'active');
+    fakeSmi(d, "echo '0, 1, 45, 300, NVIDIA GeForce RTX 3050 Laptop GPU'\ncase \"$*\" in *-lms*) exec sleep 30;; esac");
+    const lms = () => lines(d).filter(l => /-lms/.test(l)).length;
+    const smp4 = new S.Sampler({root: d.root, smi: d.smi, clock: () => t});
+    smp4.sample();
+    wait(() => lms() === 1);
+    check('TC-267 nvidia mode: power/control "on" at start uses the stream', smp4._nvProc !== null && lms() === 1, `${lms()} streams`);
+    write(d.root, `${d.dev}/power/control`, 'auto\n');
+    write(d.root, `${d.dev}/power/runtime_status`, 'suspended\n');
+    t += 30000; smp4.sample();
+    check('TC-267 nvidia mode: "auto" later stops the stream at the next rescan', smp4._nvProc === null && smp4._nvPm?.length === 1,
+        `stream ${smp4._nvProc ? 'running' : 'stopped'}`);
+    const before = lines(d).length;
+    for (let i = 0; i < 10; i++) {
+        t += 2000;
+        s = smp4.sample();
+    }
+    check('TC-267 nvidia mode: the sleeping GPU is not woken after the switch', lines(d).length === before && s.gpuPercent === 0 && /asleep/.test(s.gpuName),
+        `${lines(d).length - before} new calls, ${s.gpuPercent} ${s.gpuName}`);
+    write(d.root, `${d.dev}/power/control`, 'on\n');
+    write(d.root, `${d.dev}/power/runtime_status`, 'active\n');
+    t += 30000; smp4.sample();
+    wait(() => lms() === 2);
+    check('TC-267 nvidia mode: "on" again restarts the stream', smp4._nvProc !== null && lms() === 2 && !smp4._nvPm?.length, `${lms()} streams`);
+    smp4.destroy();
+    rmrf(d.root);
+}
+
+// TC-268: an AMD dGPU in runtime suspend is shown asleep and its files are not read (reads would wake it).
+{
+    const root = fakeRoot('amd');
+    const card = 'sys/class/drm/card2/device';
+    write(root, `${card}/gpu_busy_percent`, '30\n');
+    write(root, `${card}/mem_info_vram_total`, `${8 * 1024 ** 3}\n`);
+    write(root, `${card}/mem_info_vram_used`, `${1024 ** 3}\n`);
+    write(root, `${card}/power/runtime_status`, 'suspended\n');
+    for (const d of [`${card}/hwmon/hwmon5`, 'sys/class/hwmon/hwmon5']) {
+        write(root, `${d}/name`, 'amdgpu\n');
+        write(root, `${d}/temp1_label`, 'edge\n');
+        write(root, `${d}/temp1_input`, '50000\n');
+    }
+    const smp = new S.Sampler({root, nvidia: false});
+    let s = smp.sample();
+    const dg = s.gpus.find(g => /asleep/.test(g.name));
+    check('TC-268 amd sleep: a suspended dGPU shows asleep at 0 %', s.gpus.length === 2 && dg?.percent === 0, JSON.stringify(s.gpus));
+    check('TC-268 amd sleep: no temperature or VRAM for a suspended dGPU', dg && Number.isNaN(dg.tempC) && Number.isNaN(dg.memUsedGB), JSON.stringify(dg));
+    check('TC-268 amd sleep: the awake iGPU is still read', s.gpus.some(g => g.percent === 37 && g.tempC === 47), JSON.stringify(s.gpus));
+    check('TC-268 amd sleep: its temperature is not read through /sys/class/hwmon either', !smp._topo.hwmon.some(l => l.dir.endsWith('/hwmon5')),
+        smp._topo.hwmon.map(l => l.dir).join());
+    write(root, `${card}/power/runtime_status`, 'active\n');
+    s = smp.sample();
+    check('TC-268 amd sleep: once awake it is read again', s.gpus.some(g => g.percent === 30 && g.tempC === 50 && !/asleep/.test(g.name)), JSON.stringify(s.gpus));
+    smp.destroy();
+    rmrf(root);
+}
+
+// TC-269: a 2-socket PC has 1 coretemp chip per CPU package; TEMP shows the hotter package.
+{
+    const s0 = {name: 'coretemp', temps: [{label: 'Package id 0', c: 52}, {label: 'Core 0', c: 50}]};
+    const s1 = {name: 'coretemp', temps: [{label: 'Package id 1', c: 91}, {label: 'Core 0', c: 89}]};
+    check('TC-269 temp: the hotter of 2 CPU packages', pick([s0, s1], [])?.source === 'coretemp Package id 1', JSON.stringify(pick([s0, s1], [])));
+    check('TC-269 temp: folder order does not matter', pick([s1, s0], [])?.c === 91 && pick([s0, s1], [])?.c === 91);
+    check('TC-269 temp: a Tdie on any chip still beats a hotter Tctl',
+        pick([{name: 'k10temp', temps: [{label: 'Tctl', c: 95}]}, {name: 'k10temp', temps: [{label: 'Tdie', c: 60}]}], [])?.source === 'k10temp Tdie');
+    const root = fakeRoot('empty');
+    for (const [h, id, c] of [['hwmon10', 1, 91000], ['hwmon2', 0, 52000]]) {
+        write(root, `sys/class/hwmon/${h}/name`, 'coretemp\n');
+        write(root, `sys/class/hwmon/${h}/temp1_label`, `Package id ${id}\n`);
+        write(root, `sys/class/hwmon/${h}/temp1_input`, `${c}\n`);
+    }
+    const smp = new S.Sampler({root, nvidia: false});
+    const s = smp.sample();
+    smp.destroy();
+    rmrf(root);
+    check('TC-269 temp: 2-socket sampler shows 91 C from hwmon10', near(s.cpuTempC, 91, 0.1), `${s.cpuTempC} (${s.cpuTempSource})`);
+}
+
+// TC-270: a sensor file that exists but cannot be read waits for the 30 s rescan instead of rescanning every tick.
+for (const kind of ['hwmon input', 'thermal zone']) {
+    const root = fakeRoot('intel');
+    if (kind === 'hwmon input') {   // a folder where a file should be: listed, never readable
+        write(root, 'sys/class/hwmon/hwmon3/temp3_label', 'Core 1\n');
+        GLib.mkdir_with_parents(`${root}/sys/class/hwmon/hwmon3/temp3_input`, 0o755);
+    } else {
+        write(root, 'sys/class/thermal/thermal_zone1/type', 'iwlwifi_1\n');
+        GLib.mkdir_with_parents(`${root}/sys/class/thermal/thermal_zone1/temp`, 0o755);
+    }
+    let t = 1_000_000;
+    const smp = new S.Sampler({root, nvidia: false, clock: () => t});
+    let s = smp.sample();
+    const topo = smp._topo;
+    for (let i = 0; i < 3; i++) {
+        t += 2000;
+        s = smp.sample();
+    }
+    check(`TC-270 topology: an unreadable ${kind} does not rescan every tick`, smp._topo === topo);
+    check(`TC-270 topology: the other sensors are still read (${kind})`, near(s.cpuTempC, 64, 0.1), `${s.cpuTempC}`);
+    t += 30000; smp.sample();
+    check(`TC-270 topology: the 30 s rescan still runs (${kind})`, smp._topo !== topo);
+    const topo2 = smp._topo;
+    rmrf(`${root}/sys/class/hwmon/hwmon0`);
+    t += 2000; smp.sample();
+    t += 2000; smp.sample();
+    check(`TC-270 topology: a removed sensor folder still rescans at once (${kind})`, smp._topo !== topo2 && !smp._topo.hwmon.some(l => l.dir.endsWith('/hwmon0')));
+    smp.destroy();
+    rmrf(root);
+}
+
+// TC-264: the sampler times its rescans and rates with the monotonic clock, not the wall clock.
+{
+    const root = fakeRoot('intel');
+    const smp = new S.Sampler({root, nvidia: false});
+    check('TC-264 clock: the default sampler clock is monotonic', Math.abs(smp._clock() - GLib.get_monotonic_time() / 1000) < 1000, `${smp._clock()}`);
+    const realNow = Date.now;
+    try {
+        smp.sample();
+        Date.now = () => realNow() - 3600_000;   // the wall clock steps back 1 h
+        write(root, 'proc/diskstats', '   8       0 sda 100 0 0 0 0 0 0 0 0 1500 0\n');
+        write(root, 'proc/net/dev', '  eth0: 3000 1 0 0 0 0 0 0 900 0 0 0 0 0 0 0\n');
+        const s = smp.sample();
+        check('TC-264 clock: a 1 h backward wall-clock step keeps the 30 s rescan', smp._topo.until - smp._clock() <= 30000,
+            `next rescan in ${Math.round((smp._topo.until - smp._clock()) / 1000)} s`);
+        check('TC-264 clock: the tick after a backward step still has disk and download', Number.isFinite(s.diskPercent) && Number.isFinite(s.netDownBps),
+            `disk ${s.diskPercent}, down ${s.netDownBps}`);
+    } finally {
+        Date.now = realNow;
+    }
+    smp.destroy();
+    rmrf(root);
+}
+
+// TC-259: light-mode labels and values reach 4.5:1 text contrast (WCAG) on the light pill and card backgrounds.
+{
+    const lin = v => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    const lum = hex => (([r, g, b]) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b))(M.hexToRgb(hex));
+    const worst = cols => {
+        let w = {r: Infinity};
+        for (const c of cols) {
+            for (const bg of ['#FFFFFF', '#EEF1F8', '#F3F5FB']) {
+                const r = (Math.max(lum(c), lum(bg)) + 0.05) / (Math.min(lum(c), lum(bg)) + 0.05);
+                if (r < w.r) w = {r, c, bg};
+            }
+        }
+        return w;
+    };
+    const show = w => `${w.r.toFixed(2)}:1 for ${w.c} on ${w.bg}`;
+    const L = M.PALETTES.light, C = M.COLORS;
+    const tint = M.labelTint || (a => a);
+    let w = worst([C.cpu, C.ram, C.gpu, C.disk, C.net].flat().map(a => tint(a, L)));
+    check('TC-259 contrast: light label tint of every accent end', w.r >= 4.5, show(w));
+    const busy = {...M.emptySnapshot(), cpuPercent: 10, ramPercent: 10, gpuPercent: 10, gpus: [{name: 'GPU', percent: 10}]};
+    w = worst([...M.buildCells(busy, {download: true, palette: L}), ...M.buildCells(busy, {fourth: 'disk', palette: L})].map(c => c.labelColor));
+    check('TC-259 contrast: light pill labels as drawn (CPU RAM GPU DISK DOWN)', w.r >= 4.5, show(w));
+    const temps = [];
+    for (let c = 20; c <= 100; c += 0.5) temps.push(c);
+    w = worst([...temps, NaN].map(c => M.buildCells({...M.emptySnapshot(), cpuTempC: c}, {palette: L})[0].labelColor));
+    check('TC-259 contrast: light TEMP label over the whole ramp and unknown grey', w.r >= 4.5, show(w));
+    w = worst(temps.filter(c => M.tempLevel(c, false) === 0).flatMap(c => [
+        M.buildCells({...M.emptySnapshot(), cpuTempC: c}, {palette: L})[0].valueColor,
+        M.cardRows({...M.emptySnapshot(), cpuTempC: c}, {palette: L})[0].valueColor]));
+    check('TC-259 contrast: light TEMP values below 80 C (pill and card)', w.r >= 4.5, show(w));
+    w = worst([L.warn, L.crit]);
+    check('TC-259 contrast: light warn and crit', w.r >= 4.5, show(w));
+    w = worst([L.pinned || '#A78BFA']);
+    check('TC-259 contrast: light "Pinned"', w.r >= 4.5, show(w));
+    const surf = new Cairo.ImageSurface(Cairo.Format.ARGB32, 400, 400);
+    const cr = new Cairo.Context(surf);
+    let drawn = '';
+    try {
+        R.drawCard(cr, M.cardRows(M.emptySnapshot(), {palette: L}), L, {pinned: true});
+    } catch (e) {
+        drawn = `${e}`;
+    }
+    cr.$dispose();
+    check('TC-259 contrast: a pinned light card draws with the light "Pinned" colour', drawn === '', drawn);
+    check('TC-259 contrast: dark mode unchanged', M.PALETTES.dark.warn === '#FCD34D' && M.PALETTES.dark.crit === '#FF8FA3' && M.PALETTES.dark.pinned === '#A78BFA');
 }
 
 // TC-135: the colour is judged on the number shown.

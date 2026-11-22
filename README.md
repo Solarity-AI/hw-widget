@@ -67,7 +67,7 @@ Antivirus: older versions installed through a PowerShell script, a registry Run 
 The pill sits on the taskbar left of the tray. Hover for the details card, click to pin it, right-click for settings.
 
 Sensors: Windows performance counters for CPU, memory and disk; the `GPU Engine` counters for GPU load, as Task Manager computes it; the graphics kernel (D3DKMT) for GPU names and temperature, with NVIDIA NVML as a fallback; ACPI thermal zones for the CPU temperature; and [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) or OpenHardwareMonitor when one is running.
-It uses under 1 % of 1 core and about 35 MB of memory, and hides itself while a full-screen app (a game, a video) is in front; a maximized window doesn't hide it.
+It uses about 1 % of 1 core and about 35 MB of memory, and hides itself while a full-screen app (a game, a video) is in front; a maximized window doesn't hide it.
 
 #### No CPU temperature? Enable the helper (1 admin prompt)
 
@@ -141,11 +141,11 @@ Each command removes the widget, its startup entry and its settings. Run it from
 
 | Platform | Command | What it checks |
 | --- | --- | --- |
-| Windows | `windows\build.cmd`, then `windows\bin\HWWidget.exe --selftest out.txt` | 56 sensor, helper, install, layout, formatting, full-screen and accessibility checks |
-| Windows | `windows\tests\scripts-test.ps1` | 21 build, install and uninstall checks (folder names with brackets, spaces, parentheses and `&`; a fresh self-test report; the Startup shortcut; rollback of a build that fails its self-test) |
+| Windows | `windows\build.cmd`, then `windows\bin\HWWidget.exe --selftest out.txt` | 83 sensor, helper, install, layout, formatting, full-screen, contrast and accessibility checks |
+| Windows | `windows\tests\scripts-test.ps1` | 46 build, install and uninstall checks (folder names with brackets, spaces, parentheses, `&`, `^`, `%41`, `!` and non-ASCII letters; a fresh self-test report; the Startup shortcut; rollback of a build that fails its self-test or exits with any other code; the Task Scheduler install; the uninstaller's cleanup when the widget can't remove itself) |
 | Windows | `HWWidget.exe --render <dir>` / `--probe <secs> <csv>` | PNG renders of every state / live sensor log |
-| Linux | `sh linux/tests/run-docker.sh` | 97 parser, sensor-tree, nvidia-smi and model checks, 15 GNOME 42 module checks and 17 install and uninstall checks, in Docker on Debian trixie (GNOME 45+) and Ubuntu 22.04 (GNOME 42), plus PNG renders in `linux/tests/out` |
-| macOS | `sh macos/tests/run-docker.sh` | 67 model, parser, settings and menu-bar fit checks of the shared core, on Linux in Docker |
+| Linux | `sh linux/tests/run-docker.sh` | 138 parser, sensor-tree, nvidia-smi, clock, contrast and model checks, 15 GNOME 42 module checks and 17 install and uninstall checks, in Docker on Debian trixie (GNOME 45+) and Ubuntu 22.04 (GNOME 42), plus PNG renders in `linux/tests/out` |
+| macOS | `sh macos/tests/run-docker.sh` | 74 model, parser, settings, contrast and menu-bar fit checks of the shared core, on Linux in Docker |
 | macOS | `HWWidget --self-test`, `--probe 10`, `--render <dir>` | The same checks, a live sensor log and PNG renders, on a Mac |
 
 CI runs all 3 platforms on pull requests and on manual runs, each only when its folder changes (Windows also when a root installer `.cmd` changes).

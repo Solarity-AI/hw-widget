@@ -53,7 +53,7 @@ namespace HwWidget
             bool ok = true;
             try
             {
-                if (on) ShellLink.Create(LinkPath(dir), Application.ExecutablePath, Path.GetDirectoryName(Application.ExecutablePath));
+                if (on) ShellLink.Create(LinkPath(dir), SelfInstall.ExePath, Path.GetDirectoryName(SelfInstall.ExePath));
                 else if (File.Exists(LinkPath(dir))) File.Delete(LinkPath(dir));
             }
             catch { ok = false; }
@@ -79,7 +79,7 @@ namespace HwWidget
     internal static class SelfInstall
     {
         // Exit codes, read by the .cmd scripts.
-        public const int Ok = 0, SelfTestFailed = 3, StartupFailed = 4, HelperLeft = 5, HelperDeclined = 7;
+        public const int Ok = 0, SelfTestFailed = 3, StartupFailed = 4, HelperLeft = 5, HelperDeclined = 7, StartupAndHelperFailed = 8;
 
         // The gate passes only a report whose last line is "N passed, 0 failed".
         public static bool GatePasses(string lastLine)
@@ -87,21 +87,39 @@ namespace HwWidget
             return lastLine != null && Regex.IsMatch(lastLine, @"^\d+ passed, 0 failed$");
         }
 
-        public static int Install(InstallArgs a)
+        // The real file name: Application.ExecutablePath reads %41 in a folder name as "A".
+        internal static string ExePath { get { return Process.GetCurrentProcess().MainModule.FileName; } }
+
+        // Runs the self-test into the report and reads its last line; a self-test that throws fails the gate.
+        internal static bool RunGate(Func<string, int> selfTest, string report)
         {
-            string exe = Application.ExecutablePath;
-            string report = Path.Combine(Path.GetDirectoryName(exe), "selftest.txt");
             try { File.Delete(report); } catch { }   // an old passing report must never pass a new build
-            TestModes.SelfTest(report);
+            try { selfTest(report); }
+            catch { return false; }
             string last = null;
             try { string[] lines = File.ReadAllLines(report); if (lines.Length > 0) last = lines[lines.Length - 1]; } catch { }
-            if (!GatePasses(last)) return SelfTestFailed;
+            return GatePasses(last);
+        }
+
+        public static int Install(InstallArgs a)
+        {
+            string exe = ExePath;
+            string report = Path.Combine(Path.GetDirectoryName(exe), "selftest.txt");
+            if (!RunGate(TestModes.SelfTest, report)) return SelfTestFailed;
 
             // The widget starts even when the shortcut fails: the installer then says it is running.
             bool linked = Startup.Set(true, a.StartupDir);
             if (!a.NoLaunch) try { Process.Start(exe); } catch { }
+            return Outcome(linked, a.CpuTemp, delegate { return HelperSetup.RunElevated("--install-helper"); });
+        }
+
+        // The helper is asked for even when the shortcut failed; both failing is its own code.
+        internal static int Outcome(bool linked, bool cpuTemp, Func<bool> installHelper)
+        {
+            bool helperOk = !cpuTemp || installHelper();
+            if (!linked && !helperOk) return StartupAndHelperFailed;
             if (!linked) return StartupFailed;
-            if (a.CpuTemp && !HelperSetup.RunElevated("--install-helper")) return HelperDeclined;
+            if (!helperOk) return HelperDeclined;
             return Ok;
         }
 
@@ -109,7 +127,7 @@ namespace HwWidget
         {
             Startup.Set(false, a.StartupDir);
             if (a.KeepHelper) return Ok;
-            if (HelperSetup.Installed || Directory.Exists(HelperFile.Dir)) HelperSetup.RunElevated("--uninstall-helper");
+            if (HelperSetup.Installed) HelperSetup.RunElevated("--uninstall-helper");
             return HelperSetup.Installed ? HelperLeft : Ok;
         }
     }
