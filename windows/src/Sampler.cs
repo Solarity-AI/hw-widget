@@ -227,6 +227,7 @@ namespace HwWidget
         readonly string cpuName;
         List<Adapter> adapters = new List<Adapter>();
         DateTime adaptersAt = DateTime.MinValue;
+        readonly HashSet<string> ghostLuids = new HashSet<string>();
         Nvml nvml; bool nvmlTried;
         readonly Dictionary<string, double[]> zoneHist = new Dictionary<string, double[]>(); // min, max, firstSeenTicks
         readonly HashSet<string> deadZones = new HashSet<string>();
@@ -329,7 +330,7 @@ namespace HwWidget
             return s;
         }
 
-        static double SumNet(Dictionary<string, double> d)
+        internal static double SumNet(Dictionary<string, double> d)
         {
             if (d.Count == 0) return double.NaN;
             double sum = 0;
@@ -337,7 +338,9 @@ namespace HwWidget
             {
                 string n = kv.Key.ToLowerInvariant();
                 if (n.Contains("vethernet") || n.Contains("hyper-v") || n.Contains("loopback") || n.Contains("isatap") ||
-                    n.Contains("teredo") || n.Contains("miniport") || n.Contains("virtual") || n.Contains("vpn") || n.Contains("wsl")) continue;
+                    n.Contains("teredo") || n.Contains("miniport") || n.Contains("virtual") || n.Contains("vpn") || n.Contains("wsl") ||
+                    // VPN tunnels (Tailscale, WireGuard, OpenVPN TAP, Wintun): their traffic also crosses the physical adapter.
+                    n.Contains("tunnel") || n.Contains("tap-") || n.Contains("wintun") || n.Contains("wireguard") || n.Contains("tailscale")) continue;
                 sum += kv.Value;
             }
             return sum;
@@ -404,9 +407,18 @@ namespace HwWidget
             return j < 0 ? null : instance.Substring(i + 5, j - i - 5).ToUpperInvariant().Replace("0X", "0x");
         }
 
+        // The adapter list is re-read every 5 minutes, and after 10 s when it came back empty or the counters name an
+        // adapter it doesn't know (a driver update or reset gives the GPU a new LUID).
+        internal static bool AdaptersStale(TimeSpan age, bool empty, bool unknownLuid)
+        {
+            if (age.TotalMinutes > 5) return true;
+            return (empty || unknownLuid) && age.TotalSeconds > 10;
+        }
+
+        bool KnownAdapter(string luid) { foreach (Adapter a in adapters) if (a.Luid == luid) return true; return false; }
+
         void SampleGpu(HwSnapshot s)
         {
-            if ((DateTime.UtcNow - adaptersAt).TotalMinutes > 5) RefreshAdapters();
             // Sum each engine over all processes, then take the busiest engine per adapter (what Task Manager shows).
             Dictionary<string, double> engines = new Dictionary<string, double>();
             Dictionary<string, double> gpuRaw;
@@ -427,6 +439,16 @@ namespace HwWidget
                 string luid = kv.Key.Substring(0, kv.Key.IndexOf('|'));
                 double prev;
                 if (!perAdapter.TryGetValue(luid, out prev) || kv.Value > prev) perAdapter[luid] = kv.Value;
+            }
+            // A LUID still unknown right after a re-read (a counter with no adapter behind it) is not asked about again
+            // until the 5-minute re-read, so it can't trigger a re-read every 10 s.
+            bool unknown = false;
+            foreach (string l in perAdapter.Keys) if (!ghostLuids.Contains(l) && !KnownAdapter(l)) unknown = true;
+            if (AdaptersStale(DateTime.UtcNow - adaptersAt, adapters.Count == 0, unknown))
+            {
+                RefreshAdapters();
+                ghostLuids.Clear();
+                foreach (string l in perAdapter.Keys) if (!KnownAdapter(l)) ghostLuids.Add(l);
             }
             Dictionary<string, double> mem = new Dictionary<string, double>();
             foreach (KeyValuePair<string, double> kv in Pdh.ReadArray(cGpuMem, Pdh.FMT_DOUBLE))

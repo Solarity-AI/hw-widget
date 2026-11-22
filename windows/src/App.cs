@@ -277,7 +277,7 @@ namespace HwWidget
         {
             if (!mouseDown) return;
             int dx = Cursor.Position.X - dragStartX;
-            if (!dragging && Math.Abs(dx) > 4 * scale) { dragging = true; card.HideQuiet(); pinned = false; }
+            if (!dragging && ZOrder.DragStarts(dx, scale, tb.Height > tb.Width)) { dragging = true; card.HideQuiet(); pinned = false; }
             if (!dragging || tb.Height > tb.Width) return;
             int gap = (int)Math.Round(6 * scale);
             int x = Math.Max(tb.Left + gap, Math.Min(trayLeft - gap - Placed.Width, dragOrigX + dx));
@@ -435,9 +435,27 @@ namespace HwWidget
             try
             {
                 Directory.CreateDirectory(Settings.Dir);
-                File.AppendAllText(Path.Combine(Settings.Dir, "error.log"), DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss ") + ex + "\r\n");
+                AppendCapped(Path.Combine(Settings.Dir, "error.log"), DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss ") + ex + "\r\n", LogCap);
             }
             catch { }
+        }
+
+        public const long LogCap = 256 * 1024;
+
+        // Appends a line to the log; once the log passes the cap, it keeps only its newer half, so an error that
+        // repeats every tick can't fill the disk.
+        public static void AppendCapped(string path, string text, long cap)
+        {
+            FileInfo fi = new FileInfo(path);
+            if (fi.Exists && fi.Length + Encoding.UTF8.GetByteCount(text) > cap)
+            {
+                string old = File.ReadAllText(path);
+                int keep = (int)Math.Min(old.Length, cap / 2);
+                string tail = old.Substring(old.Length - keep);
+                int nl = tail.IndexOf('\n');
+                File.WriteAllText(path, nl >= 0 ? tail.Substring(nl + 1) : "");
+            }
+            File.AppendAllText(path, text);
         }
     }
 }

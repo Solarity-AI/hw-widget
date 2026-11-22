@@ -101,10 +101,13 @@ namespace HwWidget
 
         public void Present(Bitmap bmp, int x, int y)
         {
-            IntPtr screen = Native.GetDC(IntPtr.Zero), mem = Native.CreateCompatibleDC(screen);
-            IntPtr hb = bmp.GetHbitmap(Color.FromArgb(0)), old = Native.SelectObject(mem, hb);
+            // Everything is released in finally, also when GetHbitmap throws (GDI near its limit).
+            IntPtr screen = Native.GetDC(IntPtr.Zero), mem = IntPtr.Zero, hb = IntPtr.Zero, old = IntPtr.Zero;
             try
             {
+                mem = Native.CreateCompatibleDC(screen);
+                hb = bmp.GetHbitmap(Color.FromArgb(0));
+                old = Native.SelectObject(mem, hb);
                 Native.SIZE sz = new Native.SIZE(bmp.Width, bmp.Height);
                 Native.POINT src = new Native.POINT(0, 0), dst = new Native.POINT(x, y);
                 Native.BLENDFUNCTION bf = new Native.BLENDFUNCTION(); bf.SourceConstantAlpha = 255; bf.AlphaFormat = 1;
@@ -113,7 +116,10 @@ namespace HwWidget
             }
             finally
             {
-                Native.SelectObject(mem, old); Native.DeleteObject(hb); Native.DeleteDC(mem); Native.ReleaseDC(IntPtr.Zero, screen);
+                if (old != IntPtr.Zero) Native.SelectObject(mem, old);
+                if (hb != IntPtr.Zero) Native.DeleteObject(hb);
+                if (mem != IntPtr.Zero) Native.DeleteDC(mem);
+                Native.ReleaseDC(IntPtr.Zero, screen);
             }
         }
 

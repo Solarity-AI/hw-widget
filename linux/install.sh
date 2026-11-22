@@ -27,15 +27,24 @@ running=no
 state=$(gnome-extensions info "$uuid" 2>/dev/null | sed -n 's/^ *[Ss]tate: *//p' | tr '[:lower:]' '[:upper:]')
 case "$state" in ''|INITIALIZED|UNINSTALLED) ;; *) running=yes ;; esac
 
-rm -rf "$dest"
-mkdir -p "$dest"
+# Build the new copy next to the old one and swap only when it is complete, so a failed conversion or copy
+# leaves the working install in place.
+new="$dest.new"
+rm -rf "$new"
+mkdir -p "$new"
 if [ -n "$major" ] && [ "$major" -lt 45 ]; then
-  gjs -m "$here/legacy/convert.js" "$src" "$dest"
-  echo "${green}✅ Converted for GNOME $major and copied to $dest${off}"
+  if ! gjs -m "$here/legacy/convert.js" "$src" "$new"; then
+    rm -rf "$new"
+    echo "${red}❌ Could not convert HW Widget for GNOME $major. Your installed copy was left as it was.${off}"; exit 1
+  fi
+  done_msg="Converted for GNOME $major and copied to $dest"
 else
-  cp "$src/"*.js "$src/metadata.json" "$src/stylesheet.css" "$dest/"
-  echo "${green}✅ Copied to $dest${off}"
+  cp "$src/"*.js "$src/metadata.json" "$src/stylesheet.css" "$new/"
+  done_msg="Copied to $dest"
 fi
+rm -rf "$dest"
+mv "$new" "$dest"
+echo "${green}✅ $done_msg${off}"
 
 if [ "$running" = yes ]; then
   gnome-extensions enable "$uuid" 2>/dev/null || true

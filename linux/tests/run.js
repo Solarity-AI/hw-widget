@@ -298,6 +298,20 @@ check('TC-127 net: bridge, bond and podman names skipped without /sys',
     check('TC-135 level: 79.6 C shows 80° in amber', M.level(79.6, M.THRESHOLDS.temp) === 1 && M.fmt.temp(79.6) === '80°');
 }
 
+// QA-01: in °F the colour is judged on the °F number shown, so two readings that both show 175° look the same.
+{
+    const f1 = M.buildCells({...M.emptySnapshot(), cpuTempC: 79.4}, {fahrenheit: true})[0];
+    const f2 = M.buildCells({...M.emptySnapshot(), cpuTempC: 79.6}, {fahrenheit: true})[0];
+    check('QA-01 level: 79.4 and 79.6 C both show 175° in °F and share one colour', f1.value === '175°' && f2.value === '175°' && f1.level === 0 && f2.level === 0, `${f2.value} ${f2.level}`);
+    const r = M.cardRows({...M.emptySnapshot(), cpuTempC: 79.6}, {fahrenheit: true})[0];
+    check('QA-01 level: the °F card row is not amber at 175°F', r.valueColor !== M.PALETTES.dark.warn);
+    check('QA-01 level: 176°F is amber, 194°F is red', M.tempLevel(80, true) === 1 && M.tempLevel(90, true) === 2 && M.tempLevel(89.6, false) === 2);
+}
+
+// QA-02: the card's rates and sizes roll over at the shown value: never "1000 KB/s" or "10.0 GB".
+check('QA-02 fmt: rate rolls over at the shown value', M.fmt.rate(1023999) === '1.0 MB/s' && M.fmt.rate(999.6) === '1.0 KB/s' && M.fmt.rate(10199) === '10 KB/s' && M.fmt.rate(9.94 * 1024) === '9.9 KB/s' && M.fmt.rate(999) === '999 B/s', M.fmt.rate(1023999));
+check('QA-02 fmt: 9.96 GB shows 10 GB', M.fmt.gb(9.96) === '10 GB' && M.fmt.gb(9.94) === '9.9 GB', M.fmt.gb(9.96));
+
 // ---------------------------------------------------------------- cells
 const hot = {...M.emptySnapshot(), cpuTempC: 93, cpuPercent: 96, ramPercent: 91, gpuPercent: 97, gpus: [{name: 'GPU', percent: 97, tempC: 86, memUsedGB: 7}], gpuTempC: 86};
 let cells = M.buildCells(hot);

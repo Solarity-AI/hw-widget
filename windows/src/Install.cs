@@ -97,8 +97,10 @@ namespace HwWidget
             try { string[] lines = File.ReadAllLines(report); if (lines.Length > 0) last = lines[lines.Length - 1]; } catch { }
             if (!GatePasses(last)) return SelfTestFailed;
 
-            if (!Startup.Set(true, a.StartupDir)) return StartupFailed;
+            // The widget starts even when the shortcut fails: the installer then says it is running.
+            bool linked = Startup.Set(true, a.StartupDir);
             if (!a.NoLaunch) try { Process.Start(exe); } catch { }
+            if (!linked) return StartupFailed;
             if (a.CpuTemp && !HelperSetup.RunElevated("--install-helper")) return HelperDeclined;
             return Ok;
         }

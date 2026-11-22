@@ -50,6 +50,16 @@ for st in INACTIVE DISABLED ERROR; do
   check "TC-29 reinstall in state $st asks for a log-out" "$out" "Log out and back in to load the new version"
 done
 
+# QA-12: a failed legacy conversion leaves the working install in place instead of an empty folder.
+rm -rf "$tmp/share"
+fake INITIALIZED 0 46.2
+run >/dev/null
+printf '#!/bin/sh\nexit 1\n' > "$tmp/bin/gjs"; chmod +x "$tmp/bin/gjs"
+fake ACTIVE 0 42.9
+run >/dev/null
+check "QA-12 a failed conversion keeps the installed copy" "$(cat "$ext/extension.js" 2>/dev/null)" "^import GLib from"
+rm -f "$tmp/bin/gjs"
+
 # TC-143: uninstall takes the uuid out of the enabled list that install.sh may have written.
 echo "['ding@rastersoft.com', 'hwwidget@solarity.ai']" > "$tmp/gsettings.txt"
 HOME=$tmp XDG_DATA_HOME=$tmp/share PATH="$tmp/bin:$PATH" sh "$here/uninstall.sh" >/dev/null 2>&1

@@ -20,6 +20,13 @@ namespace HwWidget
     // Which windows sit above the pill in the z-order, and whether the taskbar is one of those covering it.
     internal static class ZOrder
     {
+        // A press turns into a drag once the cursor moves more than 4 DIP sideways. On a vertical taskbar the pill
+        // can't move, so a shaky click stays a click (it pins the card) and no offset gets saved.
+        public static bool DragStarts(int dx, float scale, bool verticalBar)
+        {
+            return !verticalBar && Math.Abs(dx) > 4 * scale;
+        }
+
         // A window in front counts as full screen when it covers the whole monitor and isn't merely maximized:
         // a maximized window overhangs the monitor by its border on every side once the taskbar auto-hides.
         public static bool IsFullscreen(Native.RECT win, Native.RECT mon, bool zoomed)

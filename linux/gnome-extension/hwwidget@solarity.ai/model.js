@@ -67,6 +67,12 @@ export function level(v, [warn, crit]) {
     return v >= crit ? 2 : v >= warn ? 1 : 0;
 }
 
+// A temperature's level, judged on the number shown: in °F that is the °F value against 176 / 194 (80 / 90 °C).
+export function tempLevel(c, f) {
+    if (!Number.isFinite(c)) return 0;
+    return f ? level(c * 9 / 5 + 32, [176, 194]) : level(c, THRESHOLDS.temp);
+}
+
 export const fmt = {
     temp(c, f) {
         if (!Number.isFinite(c)) return DASH;
@@ -82,11 +88,12 @@ export const fmt = {
         if (!Number.isFinite(bps)) return DASH;
         const u = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
         let v = Math.max(0, bps), i = 0;
-        while (v >= 1000 && i < u.length - 1) {
+        // Roll over at the value shown, so 999.6 B/s reads "1.0 KB/s", never "1000 B/s".
+        while (v >= 999.5 && i < u.length - 1) {
             v /= 1024;
             i++;
         }
-        return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
+        return `${v < 9.95 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
     },
     // The pill's 4-character rate: 0K, 999K, 1.0M, 9.9M, 10M, 999M, 1.0G (1024-based, per second).
     rateShort(bps) {
@@ -100,7 +107,7 @@ export const fmt = {
         return i > 0 && v < 9.95 ? `${v.toFixed(1)}${u[i]}` : `${Math.round(v)}${u[i]}`;
     },
     gb(g) {
-        return Number.isFinite(g) ? `${g < 10 ? g.toFixed(1) : Math.round(g)} GB` : DASH;
+        return Number.isFinite(g) ? `${g < 9.95 ? g.toFixed(1) : Math.round(g)} GB` : DASH;
     },
 };
 
@@ -147,7 +154,7 @@ export function buildCells(s, {fahrenheit = false, fourth = 'auto', download = f
         tc = s.gpuTempC;
         label = 'GPU°';
     }
-    const tcol = tempColor(tc), tl = level(tc, THRESHOLDS.temp);
+    const tcol = tempColor(tc), tl = tempLevel(tc, fahrenheit);
     const cells = [{
         label,
         value: fmt.temp(tc, fahrenheit),
@@ -184,7 +191,7 @@ function heat(row, lvl) {
 
 export function cardRows(s, {fahrenheit = false, palette = PALETTES.dark} = {}) {
     const p = palette, rows = [];
-    const tc = tempColor(s.cpuTempC), tl = level(s.cpuTempC, THRESHOLDS.temp);
+    const tc = tempColor(s.cpuTempC), tl = tempLevel(s.cpuTempC, fahrenheit);
     rows.push({
         title: 'Temperature',
         sub: Number.isFinite(s.cpuTempC) ? `CPU · ${s.cpuTempSource || 'sensor'}` : 'No CPU temperature sensor found',

@@ -46,8 +46,9 @@ namespace HwWidget
             if (double.IsNaN(bps)) return Dash;
             string[] u = { "B/s", "KB/s", "MB/s", "GB/s" };
             double v = Math.Max(0, bps); int i = 0;
-            while (v >= 1000 && i < u.Length - 1) { v /= 1024; i++; }
-            return (v < 10 && i > 0 ? v.ToString("0.0", Inv) : R(v).ToString("0", Inv)) + " " + u[i];
+            // Roll over on the value shown, as RateShort does: 999.6 B/s is "1.0 KB/s", never "1000 B/s" or "10.0 KB/s".
+            while (v >= 999.5 && i < u.Length - 1) { v /= 1024; i++; }
+            return (v < 9.95 && i > 0 ? v.ToString("0.0", Inv) : R(v).ToString("0", Inv)) + " " + u[i];
         }
         // The pill's 4-character rate: 0K, 999K, 1.0M, 9.9M, 10M, 999M, 1.0G (1024-based, per second).
         public static string RateShort(double bps)
@@ -62,7 +63,7 @@ namespace HwWidget
         public static string GB(double g)
         {
             if (double.IsNaN(g)) return Dash;
-            return (g < 10 ? g.ToString("0.0", Inv) : R(g).ToString("0", Inv)) + " GB";
+            return (g < 9.95 ? g.ToString("0.0", Inv) : R(g).ToString("0", Inv)) + " GB";
         }
         // Half away from zero, as GNOME and macOS show it (Math.Round alone rounds 68.5 to 68).
         static double R(double v) { return Math.Round(v, MidpointRounding.AwayFromZero); }
@@ -73,6 +74,13 @@ namespace HwWidget
             if (double.IsNaN(v)) return 0;
             v = R(v);
             return v >= crit ? 2 : v >= warn ? 1 : 0;
+        }
+
+        // Temperature: amber at 80 °C, red at 90 °C, judged on the number shown in the chosen unit (176 / 194 °F).
+        public static int TempLevel(double c, bool f)
+        {
+            if (double.IsNaN(c)) return 0;
+            return f ? Level(c * 9 / 5 + 32, 176, 194) : Level(c, 80, 90);
         }
     }
 
@@ -182,7 +190,7 @@ namespace HwWidget
             t.Value = Fmt.Temp(tc, fahrenheit);
             t.Frac = double.IsNaN(tc) ? double.NaN : (tc - 30) / 70.0;
             t.Bar1 = BarTone(TempColor(35), p); t.Bar2 = BarTone(tcol, p);
-            t.Level = Fmt.Level(tc, 80, 90);
+            t.Level = Fmt.TempLevel(tc, fahrenheit);
             t.LabelColor = LabelTint(tcol, p);
             t.ValueColor = t.Level > 0 ? ValueColor(t.Level, p) : (p.Dark ? Lighten(tcol, 0.45) : Darken(tcol, 0.45));
             cells.Add(t);
@@ -392,7 +400,7 @@ namespace HwWidget
             r.Value = Fmt.TempLong(s.CpuTempC, f);
             r.Frac = double.IsNaN(s.CpuTempC) ? double.NaN : (s.CpuTempC - 30) / 70.0;
             r.A = TempColor(35); r.B = TempColor(s.CpuTempC); r.Dot = r.B;
-            int tl = Fmt.Level(s.CpuTempC, 80, 90);
+            int tl = Fmt.TempLevel(s.CpuTempC, f);
             r.ValueColor = tl > 0 ? ValueColor(tl, p) : (p.Dark ? Lighten(r.B, 0.35) : Darken(r.B, 0.45));
             rows.Add(r);
 
