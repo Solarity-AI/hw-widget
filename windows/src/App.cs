@@ -27,7 +27,7 @@ namespace HwWidget
         Thread worker;
         volatile bool stopping;
         volatile HwSnapshot last = new HwSnapshot();
-        bool dark = true, hover, pinned, hiddenForShell = true, mouseDown, dragging;
+        bool dark = true, hover, pinned, hiddenForShell = true, mouseDown, dragging, inStrip;
         float scale = 1f;
         string drawnKey;   // Painter.PillKey of the pill on screen
         int ticks, hoverTicks, leaveTicks, dragStartX, dragOrigX, trayLeft;
@@ -128,14 +128,22 @@ namespace HwWidget
         {
             if (ticks % 8 == 0) { bool d = ReadDark(); if (d != dark) { dark = d; Redraw(); } }
             IntPtr tray = Native.FindWindowW("Shell_TrayWnd", null);
-            bool hide = tray == IntPtr.Zero || !Native.GetWindowRect(tray, out tb);
+            // The shared widget strip at the top of the primary monitor is the bar when it exists; the taskbar,
+            // which Quick Settings lifts above every always-on-top window, is only the fallback.
+            IntPtr strip = SolarityWidgets.Strip.Ensure();
+            Native.RECT sr = new Native.RECT();
+            inStrip = strip != IntPtr.Zero && Native.GetWindowRect(strip, out sr) && sr.Width > 0 && sr.Height > 0;
+            if (inStrip) tb = sr;
+            bool hide = !inStrip && (tray == IntPtr.Zero || !Native.GetWindowRect(tray, out tb));
             if (!hide)
             {
-                Native.MONITORINFO mi = Native.Monitor(tray); mon = mi.rcMonitor; work = mi.rcWork;
-                uint dpi = 0; try { dpi = Native.GetDpiForWindow(tray); } catch { }
-                float s = dpi > 0 ? dpi / 96f : 1f;
+                Native.MONITORINFO mi = Native.Monitor(inStrip ? strip : tray); mon = mi.rcMonitor; work = mi.rcWork;
+                float s;
+                // The strip's own height gives its monitor's scale; its window may belong to another widget's process.
+                if (inStrip) s = tb.Height / (float)SolarityWidgets.Strip.HeightDip;
+                else { uint dpi = 0; try { dpi = Native.GetDpiForWindow(tray); } catch { } s = dpi > 0 ? dpi / 96f : 1f; }
                 if (Math.Abs(s - scale) > 0.01f) { scale = s; }
-                hide = TaskbarAutoHidden() || ForegroundIsFullscreen(tray);
+                hide = (!inStrip && TaskbarAutoHidden()) || ForegroundIsFullscreen(tray);
                 if (!hide && !mouseDown)
                 {
                     Size sz = Painter.PillSize(CurrentCells().Length, scale);
@@ -178,13 +186,20 @@ namespace HwWidget
         {
             IntPtr fg = Native.GetForegroundWindow();
             if (fg == IntPtr.Zero || fg == tray || fg == Handle || fg == card.Handle) return false;
-            string cls = Native.ClassOf(fg);
-            if (cls == "Progman" || cls == "WorkerW" || cls == "Shell_TrayWnd" || cls == "Shell_SecondaryTrayWnd") return false;
+            // Start, Search, Task View, Quick Settings and the like cover the monitor for a moment but are not apps.
+            if (ZOrder.IsShellClass(Native.ClassOf(fg))) return false;
             Native.RECT r;
             if (!Native.GetWindowRect(fg, out r)) return false;
             Native.MONITORINFO fm = Native.Monitor(fg);
             if (fm.rcMonitor.Left != mon.Left || fm.rcMonitor.Top != mon.Top) return false;
-            return ZOrder.IsFullscreen(r, mon, Native.IsZoomed(fg));
+            if (!ZOrder.IsFullscreen(r, mon, Native.IsZoomed(fg))) return false;
+            uint pid; Native.GetWindowThreadProcessId(fg, out pid);   // only now: a process lookup costs more
+            return !ZOrder.IsShellProcess(ProcessName(pid));
+        }
+
+        static string ProcessName(uint pid)
+        {
+            try { using (Process p = Process.GetProcessById((int)pid)) return p.ProcessName; } catch { return ""; }
         }
 
         Point Target(IntPtr tray, Size sz)
@@ -193,24 +208,15 @@ namespace HwWidget
             if (tb.Height > tb.Width)   // vertical taskbar: float in the work area's bottom-right corner
                 return new Point(work.Right - w - gap * 2, work.Bottom - h - gap * 2);
 
-            IntPtr notify = Native.FindWindowExW(tray, IntPtr.Zero, "TrayNotifyWnd", null);
-            Native.RECT nr;
-            trayLeft = notify != IntPtr.Zero && Native.GetWindowRect(notify, out nr) && nr.Left > tb.Left ? nr.Left : tb.Right - (int)(300 * scale);
-            int y = tb.Top + (tb.Height - h) / 2;
-            int maxX = trayLeft - gap - w, minX = tb.Left + gap;
-            int x = cfg.OffsetFromRight >= 0 ? tb.Right - (int)Math.Round(cfg.OffsetFromRight * scale) : maxX;
-            x = Math.Max(minX, Math.Min(maxX, x));
-
-            // Step left past other taskbar pills (the Claude/Codex usage widgets and the like).
-            List<Native.RECT> obs = Obstacles(tray);
-            for (int iter = 0; iter < 12; iter++)
+            if (inStrip) trayLeft = tb.Right;   // the strip has no notification area
+            else
             {
-                bool moved = false;
-                foreach (Native.RECT o in obs)
-                    if (x < o.Right + gap && x + w > o.Left - gap) { x = o.Left - gap - w; moved = true; }
-                if (!moved) break;
+                IntPtr notify = Native.FindWindowExW(tray, IntPtr.Zero, "TrayNotifyWnd", null);
+                Native.RECT nr;
+                trayLeft = notify != IntPtr.Zero && Native.GetWindowRect(notify, out nr) && nr.Left > tb.Left ? nr.Left : tb.Right - (int)(300 * scale);
             }
-            return new Point(Math.Max(minX, x), y);
+            // Step left past other pills (the Claude/Codex usage widgets and the like).
+            return ZOrder.PillPoint(tb, trayLeft, sz, scale, cfg.OffsetFromRight, Obstacles(tray));
         }
 
         List<Native.RECT> Obstacles(IntPtr tray)
@@ -267,10 +273,7 @@ namespace HwWidget
                 int m = (int)Math.Round(Painter.CardMargin * scale), gap = (int)Math.Round(6 * scale);
                 int x = Placed.X + Placed.Width / 2 - b.Width / 2;
                 x = Math.Max(work.Left - m + gap, Math.Min(work.Right - b.Width + m - gap, x));
-                bool bottomBar = tb.Top > mon.Top + (mon.Bottom - mon.Top) / 2;
-                int y;
-                if (tb.Height > tb.Width) y = Placed.Y - b.Height + m - gap;
-                else y = bottomBar ? tb.Top - b.Height + m - gap : tb.Bottom - m + gap;
+                int y = tb.Height > tb.Width ? Placed.Y - b.Height + m - gap : ZOrder.CardY(tb, mon, b.Height, m, gap);
                 card.Present(b, x, y);
             }
             if (!card.Shown2) card.ShowQuiet();
@@ -435,7 +438,8 @@ namespace HwWidget
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 Application.ThreadException += delegate(object s, ThreadExceptionEventArgs e) { Log(e.Exception); };
-                Application.Run(new WidgetForm());
+                try { Application.Run(new WidgetForm()); }
+                finally { try { SolarityWidgets.Strip.Close(); } catch { } }   // same UI thread that made the strip
             }
             return 0;
         }

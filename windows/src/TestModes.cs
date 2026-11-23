@@ -271,6 +271,33 @@ namespace HwWidget
             above.Add(new KeyValuePair<string, Native.RECT>("Shell_TrayWnd", barR));
             check("z-order: a taskbar raised over the pill is detected", ZOrder.ShellCovers(above, pillR));
 
+            // Widget strip: the pill sits in the shared strip at the top of the primary monitor (pure placement only:
+            // the self-test never creates the real strip, which would reserve screen space).
+            Native.RECT stripMon = new Native.RECT(); stripMon.Right = 1920; stripMon.Bottom = 1080;
+            SolarityWidgets.Strip.RECT sw = new SolarityWidgets.Strip.RECT(); sw.Right = 1920; sw.Bottom = 1080;
+            SolarityWidgets.Strip.RECT want = SolarityWidgets.Strip.Wanted(sw, 120);
+            check("strip: 40 DIP tall across the top, 50 px at 125%", want.Left == 0 && want.Top == 0 && want.Right == 1920 && want.Bottom == 50);
+            Native.RECT strip = new Native.RECT(); strip.Right = 1920; strip.Bottom = 50;
+            Size pill5 = Painter.PillSize(5, 1.25f);
+            Point sp = ZOrder.PillPoint(strip, strip.Right, pill5, 1.25f, -1, new List<Native.RECT>());
+            check("strip: the pill is right-aligned to the strip's edge, no tray area", sp.X == 1920 - 8 - pill5.Width && sp.X + pill5.Width <= 1920);
+            check("strip: the pill is centred vertically inside the strip", sp.Y == (50 - pill5.Height) / 2 && sp.Y >= 0 && sp.Y + pill5.Height <= 50);
+            List<Native.RECT> others = new List<Native.RECT>();
+            Native.RECT o1 = new Native.RECT(); o1.Left = 1700; o1.Top = 4; o1.Right = 1912; o1.Bottom = 46; others.Add(o1);
+            Native.RECT o2 = new Native.RECT(); o2.Left = 1400; o2.Top = 4; o2.Right = 1690; o2.Bottom = 46; others.Add(o2);
+            Point stacked = ZOrder.PillPoint(strip, strip.Right, pill5, 1.25f, -1, others);
+            check("strip: the pill stacks right to left past other pills without overlapping", stacked.X == 1400 - 8 - pill5.Width && stacked.X + pill5.Width < o2.Left);
+            check("strip: the hover card opens below a strip at the top", ZOrder.CardY(strip, stripMon, 300, 10, 8) == 50 - 10 + 8);
+            Native.RECT taskbar = new Native.RECT(); taskbar.Top = 1020; taskbar.Right = 1920; taskbar.Bottom = 1080;
+            Point tp = ZOrder.PillPoint(taskbar, 1700, pill5, 1.25f, -1, new List<Native.RECT>());
+            check("strip: without a strip the pill falls back to the taskbar, left of the tray", tp.X == 1700 - 8 - pill5.Width && tp.Y == 1020 + (60 - pill5.Height) / 2);
+            check("strip: on a bottom taskbar the card still opens above it", ZOrder.CardY(taskbar, stripMon, 300, 10, 8) == 1020 - 300 + 10 - 8);
+            // Quick Settings, Start and the other shell overlays are not full-screen apps (seen: XamlExplorerHostIslandWindow hid the pill).
+            check("fullscreen: shell overlay classes are skipped", ZOrder.IsShellClass("XamlExplorerHostIslandWindow") && ZOrder.IsShellClass("ControlCenterWindow") &&
+                ZOrder.IsShellClass("MultitaskingViewFrame") && ZOrder.IsShellClass("Shell_TrayWnd") && ZOrder.IsShellClass(SolarityWidgets.Strip.ClassName) && !ZOrder.IsShellClass("Chrome_WidgetWin_1"));
+            check("fullscreen: shell processes are skipped, apps are not", ZOrder.IsShellProcess("ShellHost") && ZOrder.IsShellProcess("explorer") && ZOrder.IsShellProcess("searchhost") &&
+                ZOrder.IsShellProcess("StartMenuExperienceHost") && !ZOrder.IsShellProcess("vlc") && !ZOrder.IsShellProcess(""));
+
             check("install: gate passes only a clean report", SelfInstall.GatePasses("48 passed, 0 failed") && !SelfInstall.GatePasses("47 passed, 1 failed") && !SelfInstall.GatePasses(null) && !SelfInstall.GatePasses(""));
             InstallArgs ia = InstallArgs.Parse(new string[] { "--install", "--CPU-TEMP", "--startup", @"C:\x y", "--no-launch" }, 1);
             check("install: arguments parse", ia.CpuTemp && ia.NoLaunch && !ia.KeepHelper && ia.StartupDir == @"C:\x y" && !InstallArgs.Parse(new string[] { "--install" }, 1).CpuTemp);
