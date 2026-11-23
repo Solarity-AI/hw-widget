@@ -58,5 +58,50 @@ namespace HwWidget
             }
             return false;
         }
+
+        // Shell surfaces that cover the whole monitor for a moment (Start, Search, Task View, Alt+Tab, Quick Settings,
+        // the notification center, taskbar thumbnails) but are not full-screen apps: the pill stays visible. The same
+        // lists as the PowerShell usage widget, plus Quick Settings' ControlCenterWindow.
+        static readonly string[] ShellClasses = { "Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd",
+            "MultitaskingViewFrame", "XamlExplorerHostIslandWindow", "TaskListThumbnailWnd", "ForegroundStaging",
+            "Windows.UI.Input.InputSite.WindowClass", "NotifyIconOverflowWindow", "TopLevelWindowForOverflowXamlIsland",
+            "ControlCenterWindow", SolarityWidgets.Strip.ClassName };
+        static readonly string[] ShellProcesses = { "explorer", "StartMenuExperienceHost", "SearchHost", "SearchApp",
+            "ShellExperienceHost", "ShellHost", "TextInputHost" };
+
+        public static bool IsShellClass(string cls) { return Array.IndexOf(ShellClasses, cls) >= 0; }
+
+        public static bool IsShellProcess(string process)
+        {
+            foreach (string p in ShellProcesses) if (string.Equals(p, process, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        // Where the pill goes on a horizontal bar (the taskbar or the widget strip): right-aligned before rightLimit
+        // (the notification area on the taskbar, the bar's own right edge in the strip), or at the saved offset,
+        // centred vertically, then stepped left past other pills so none overlap.
+        public static Point PillPoint(Native.RECT bar, int rightLimit, Size sz, float scale, int offsetFromRight, List<Native.RECT> obstacles)
+        {
+            int w = sz.Width, h = sz.Height, gap = (int)Math.Round(6 * scale);
+            int y = bar.Top + (bar.Height - h) / 2;
+            int maxX = rightLimit - gap - w, minX = bar.Left + gap;
+            int x = offsetFromRight >= 0 ? bar.Right - (int)Math.Round(offsetFromRight * scale) : maxX;
+            x = Math.Max(minX, Math.Min(maxX, x));
+            for (int iter = 0; iter < 12; iter++)
+            {
+                bool moved = false;
+                foreach (Native.RECT o in obstacles)
+                    if (x < o.Right + gap && x + w > o.Left - gap) { x = o.Left - gap - w; moved = true; }
+                if (!moved) break;
+            }
+            return new Point(Math.Max(minX, x), y);
+        }
+
+        // The hover card's top on a horizontal bar: above a bar in the lower half of the monitor, below one at the top.
+        public static int CardY(Native.RECT bar, Native.RECT mon, int cardHeight, int margin, int gap)
+        {
+            bool bottomBar = bar.Top > mon.Top + (mon.Bottom - mon.Top) / 2;
+            return bottomBar ? bar.Top - cardHeight + margin - gap : bar.Bottom - margin + gap;
+        }
     }
 }
