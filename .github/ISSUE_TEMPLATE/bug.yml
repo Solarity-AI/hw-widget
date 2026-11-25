@@ -1,0 +1,53 @@
+name: Bug report
+description: The pill shows a wrong, missing or stuck reading, or doesn't start.
+labels: [bug]
+body:
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - Linux (GNOME)
+        - macOS
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      description: For example Windows 11 24H2, Ubuntu 24.04 with GNOME 46, or macOS 15.1.
+    validations:
+      required: true
+  - type: input
+    id: cpu
+    attributes:
+      label: CPU model
+      description: For example Intel Core i7-1365U or AMD Ryzen 7 7840HS.
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU model
+      description: For example NVIDIA RTX 4060 Laptop, AMD Radeon 780M, Intel Iris Xe, or "none".
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: HW Widget version
+      description: The release you installed, for example v1.2.4.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What the pill or the details show, and what you expected (for example the value Task Manager shows).
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What you did before it happened. Attach a screenshot if it helps.
