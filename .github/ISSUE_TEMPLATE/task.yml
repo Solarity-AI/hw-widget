@@ -1,0 +1,29 @@
+name: Task or bug
+description: A piece of work or a bug. Title starts with a verb.
+title: "Fix "
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What and why
+      description: For a bug, your OS, hardware and what the pill shows.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: 1 line per condition that must hold when this is done.
+      placeholder: |
+        - TEMP shows the CPU package temperature on Intel laptops.
+    validations:
+      required: true
+  - type: textarea
+    id: verify
+    attributes:
+      label: How to verify
+      description: The command to run and its result, or the manual steps and what you should see.
+      placeholder: |
+        sh tools/verify.sh windows  ->  PASS windows
+    validations:
+      required: true

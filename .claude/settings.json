@@ -1,0 +1,48 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sh tools/verify.sh)",
+      "Bash(sh tools/verify.sh:*)",
+      "Bash(sh linux/tests/run-docker.sh)",
+      "Bash(sh macos/tests/run-docker.sh)",
+      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File windows/tests/run.ps1)",
+      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File windows/tests/scripts-test.ps1)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh run list:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./.env.*.local)",
+      "Read(./.env.development)",
+      "Read(./.env.production)",
+      "Read(./.env.staging)",
+      "Read(./.env.test)",
+      "Bash(*Install HW Widget*)",
+      "Bash(*Uninstall HW Widget*)",
+      "Bash(*linux/install.sh*)",
+      "Bash(*linux/uninstall.sh*)",
+      "Bash(*macos/install.sh*)",
+      "Bash(*macos/uninstall.sh*)",
+      "Bash(*--install*)",
+      "Bash(*--uninstall*)",
+      "Bash(gh release create:*)",
+      "Bash(gh release delete:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean -f:*)",
+      "Bash(rm -rf:*)",
+      "Bash(gh repo delete:*)",
+      "Bash(gh issue delete:*)"
+    ]
+  }
+}

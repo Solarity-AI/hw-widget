@@ -1,7 +1,14 @@
 name: CI
-# Pull requests and manual runs only. Each job runs only when its platform's files change.
+# Pull requests and manual runs only (org rules: no push, no schedule). Each job runs only when its platform's files
+# change and calls the repo's verify command for that platform: sh tools/verify.sh <platform>.
+# Hosted runners on purpose: this repo is public, the org's self-hosted runners do not take public-repo jobs, and
+# fork pull requests must not run on owner machines.
 on:
   pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "LICENSE"
   workflow_dispatch:
 
 permissions:
@@ -31,7 +38,7 @@ jobs:
           # The Windows installers live at the repo root, and windows/tests/scripts-test.ps1 tests them.
           for p in windows linux macos; do
             extra='^/'; [ "$p" = windows ] && extra='^[^/]* \(Windows\)\.cmd$'
-            if echo "$files" | grep -qE "^($p/|\.github/)|$extra"; then echo "$p=true" >> "$GITHUB_OUTPUT"; else echo "$p=false" >> "$GITHUB_OUTPUT"; fi
+            if echo "$files" | grep -qE "^($p/|tools/|\.github/)|$extra"; then echo "$p=true" >> "$GITHUB_OUTPUT"; else echo "$p=false" >> "$GITHUB_OUTPUT"; fi
           done
 
   windows:
@@ -40,18 +47,12 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
-      - name: Build
+      - name: Verify (build, self-test, script tests)
+        shell: bash
+        run: sh tools/verify.sh windows
+      - name: Renders
         shell: powershell
-        run: ./windows/build.ps1
-      - name: Self-test and renders
-        shell: powershell
-        run: |
-          Start-Process windows/bin/HWWidget.exe -ArgumentList '--selftest', "$env:RUNNER_TEMP\selftest.txt" -Wait
-          Get-Content "$env:RUNNER_TEMP\selftest.txt"
-          if ((Get-Content "$env:RUNNER_TEMP\selftest.txt" -Tail 1) -notmatch ' 0 failed') { exit 1 }
-          powershell -NoProfile -ExecutionPolicy Bypass -File windows/tests/scripts-test.ps1
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          Start-Process windows/bin/HWWidget.exe -ArgumentList '--render', "$env:RUNNER_TEMP\render" -Wait
+        run: Start-Process windows/bin/HWWidget.exe -ArgumentList '--render', "$env:RUNNER_TEMP\render" -Wait
       - uses: actions/upload-artifact@v4
         with:
           name: windows-renders
@@ -63,7 +64,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: sh linux/tests/run-docker.sh
+      - run: sh tools/verify.sh linux
       - uses: actions/upload-artifact@v4
         with:
           name: gnome-renders
@@ -75,13 +76,10 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - run: ./macos/build.sh
-      - name: Self-test, live probe and renders
-        run: |
-          bin="macos/build/HW Widget.app/Contents/MacOS/HWWidget"
-          "$bin" --self-test
-          "$bin" --probe 6
-          "$bin" --render "$RUNNER_TEMP/render"
+      - name: Verify (build, self-test, live probe)
+        run: sh tools/verify.sh macos
+      - name: Renders
+        run: '"macos/build/HW Widget.app/Contents/MacOS/HWWidget" --render "$RUNNER_TEMP/render"'
       - uses: actions/upload-artifact@v4
         with:
           name: macos-renders
