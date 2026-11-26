@@ -38,8 +38,7 @@ when `docker info` doesn't answer within 15 s.
 ## Rules
 
 - `windows/src/WidgetStrip.cs` is the shared top strip, the same file as `shared/WidgetStrip.cs` in
-  `Solarity-AI/ai-usage-taskbar-widgets` and `src/WidgetStrip.cs` in `Solarity-AI/machines-widget`: change all 3 copies
-  together, or not at all.
+  `Solarity-AI/ai-usage-taskbar-widgets` and in a third, private widget repo: change all 3 copies together, or not at all.
 - Line endings come from `.gitattributes`: `.cs`, `.ps1` and `.cmd` are CRLF; `.sh`, `.js` and `.swift` are LF. Keep them.
 - Do not run the installers or uninstallers (`*.cmd` at the root, `linux/install.sh`, `macos/install.sh`, the uninstall
   scripts): they install into the user's session.
