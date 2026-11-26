@@ -141,9 +141,9 @@ Each command removes the widget, its startup entry and its settings. Run it from
 
 | Platform | Command | What it checks |
 | --- | --- | --- |
-| Windows | `windows\build.cmd`, then `windows\bin\HWWidget.exe --selftest out.txt` | 83 sensor, helper, install, layout, formatting, full-screen, contrast and accessibility checks |
+| Windows | `windows\build.cmd`, then `windows\bin\HWWidget.exe --selftest out.txt` | 92 sensor, helper, install, layout, formatting, full-screen, contrast and accessibility checks |
 | Windows | `windows\tests\scripts-test.ps1` | 46 build, install and uninstall checks (folder names with brackets, spaces, parentheses, `&`, `^`, `%41`, `!` and non-ASCII letters; a fresh self-test report; the Startup shortcut; rollback of a build that fails its self-test or exits with any other code; the Task Scheduler install; the uninstaller's cleanup when the widget can't remove itself) |
-| Windows | `HWWidget.exe --render <dir>` / `--probe <secs> <csv>` | PNG renders of every state / live sensor log |
+| Windows | `windows\bin\HWWidget.exe --render <dir>` / `--probe <secs> <csv>` | PNG renders of every state / live sensor log |
 | Linux | `sh linux/tests/run-docker.sh` | 138 parser, sensor-tree, nvidia-smi, clock, contrast and model checks, 15 GNOME 42 module checks and 17 install and uninstall checks, in Docker on Debian trixie (GNOME 45+) and Ubuntu 22.04 (GNOME 42), plus PNG renders in `linux/tests/out` |
 | macOS | `sh macos/tests/run-docker.sh` | 74 model, parser, settings, contrast and menu-bar fit checks of the shared core, on Linux in Docker |
 | macOS | `HWWidget --self-test`, `--probe 10`, `--render <dir>` | The same checks, a live sensor log and PNG renders, on a Mac |
