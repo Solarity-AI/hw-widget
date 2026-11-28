@@ -24,6 +24,10 @@
       "Bash(gh run view:*)",
       "Bash(gh run list:*)"
     ],
+    "ask": [
+      "Edit(./windows/src/WidgetStrip.cs)",
+      "Write(./windows/src/WidgetStrip.cs)"
+    ],
     "deny": [
       "Read(./.env)",
       "Read(./.env.local)",
