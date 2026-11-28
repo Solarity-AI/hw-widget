@@ -24,8 +24,9 @@ when `docker info` doesn't answer within 15 s.
 
 ## Layout
 
-- `windows/src/*.cs`: the Windows app (`Sampler.cs` reads sensors, `Render.cs` formats and draws, `TestModes.cs` holds the
-  self-test checks and `--render`).
+- `windows/src/*.cs`: the Windows app (`Sampler.cs` reads sensors, `Processes.cs` ranks the busiest processes for the hover
+  card, `Render.cs` formats and draws, `TestModes.cs` holds the self-test checks and `--render`). It is C# 5 only, built by
+  the in-box .NET Framework `csc.exe` through `windows/build.cmd`: no `?.`, `$"..."`, `nameof` or expression-bodied members.
 - `linux/gnome-extension/hwwidget@solarity.ai/`: the GNOME extension (`sensors.js`, `model.js`, `render.js`).
 - `linux/tests/run.js`: the GNOME extension's checks; `linux/tests/install-test.sh` tests the install scripts.
 - `macos/Sources/`: the macOS app (`Sampler.swift` reads sensors, `App.swift` draws, `Core.swift` is the shared logic and its
