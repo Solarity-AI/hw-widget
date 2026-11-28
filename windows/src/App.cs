@@ -26,6 +26,7 @@ namespace HwWidget
         readonly AutoResetEvent wake = new AutoResetEvent(false);
         Thread worker;
         volatile bool stopping;
+        volatile bool cardOpen;   // the sampler reads the busiest processes only while the card is open
         volatile HwSnapshot last = new HwSnapshot();
         bool dark = true, hover, pinned, hiddenForShell = true, mouseDown, dragging, inStrip;
         float scale = 1f;
@@ -74,9 +75,11 @@ namespace HwWidget
                 wake.WaitOne(1000);
                 while (!stopping)
                 {
+                    smp.WantProcesses = cardOpen;
                     try { last = smp.Sample(); } catch { }
                     try { if (IsHandleCreated && !stopping) BeginInvoke(new Action(Redraw)); } catch { }
-                    wake.WaitOne(cfg.IntervalSec * 1000);
+                    // Right after the card opens, the per-process rates need a 2nd reading: take it in 1 s.
+                    wake.WaitOne(smp.QuickResample ? 1000 : cfg.IntervalSec * 1000);
                 }
             }
         }
@@ -122,6 +125,8 @@ namespace HwWidget
             ticks++;
             if (ticks % 4 == 0) Housekeep(); else KeepAboveTaskbar();
             HoverLogic();
+            bool open = card.Shown2;
+            if (open != cardOpen) { cardOpen = open; if (open) wake.Set(); }
         }
 
         void Housekeep()

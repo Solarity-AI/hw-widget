@@ -1,4 +1,4 @@
-﻿// HW Widget for Windows - hardware sampler.
+// HW Widget for Windows - hardware sampler.
 // C# 5 only: compiled by the in-box .NET Framework compiler (csc.exe v4.x), no SDK, no admin rights.
 using System;
 using System.Collections.Generic;
@@ -17,6 +17,7 @@ namespace HwWidget
         public double TempC = double.NaN;
         public double MemUsedGB = double.NaN;
         public bool Integrated;
+        public TopProc[] Top;                      // busiest processes on this GPU; null while the card is closed
     }
 
     public sealed class HwSnapshot
@@ -37,6 +38,8 @@ namespace HwWidget
         public double DiskPercent = double.NaN;
         public double NetDownBps = double.NaN;
         public double NetUpBps = double.NaN;
+        // Busiest processes, read only while the card is open; null = not read.
+        public TopProc[] TopCpu, TopRam, TopRead;
     }
 
     // ------------------------------------------------------------------ PDH (performance counters)
@@ -237,6 +240,12 @@ namespace HwWidget
         readonly HashSet<string> deadZones = new HashSet<string>();
         object lhm; long lhmCheckAt = LongAgo, lhmReadAt = LongAgo; double lhmTemp = double.NaN; string lhmName = "";
         bool disposed;
+        ProcSampler procs;
+
+        // Set by the window while the hover card is open; the per-process counters are read only then.
+        public volatile bool WantProcesses;
+        // True after a reading that only primed the per-process rates: read again in about 1 s.
+        public bool QuickResample { get; private set; }
 
         public HwSampler()
         {
@@ -309,7 +318,20 @@ namespace HwWidget
             }
             catch { }
 
-            try { SampleGpu(s); } catch { }
+            Dictionary<string, double> gpuRaw = null;
+            try { gpuRaw = SampleGpu(s); } catch { }
+            QuickResample = false;
+            if (WantProcesses)
+            {
+                try
+                {
+                    if (procs == null) procs = new ProcSampler();
+                    QuickResample = procs.Sample(s);
+                    if (gpuRaw != null) procs.SampleGpu(s, gpuRaw);
+                }
+                catch { }
+            }
+            else if (procs != null) procs.Pause();
             try { SampleCpuTemp(s); } catch { }
 
             try
@@ -443,7 +465,7 @@ namespace HwWidget
 
         bool KnownAdapter(string luid) { foreach (Adapter a in adapters) if (a.Luid == luid) return true; return false; }
 
-        void SampleGpu(HwSnapshot s)
+        Dictionary<string, double> SampleGpu(HwSnapshot s)
         {
             // Sum each engine over all processes, then take the busiest engine per adapter (what Task Manager shows).
             Dictionary<string, double> engines = new Dictionary<string, double>();
@@ -536,6 +558,7 @@ namespace HwWidget
             if (busiest != null) { s.GpuPercent = busiest.Percent; s.GpuName = busiest.Name; }
             foreach (GpuInfo g in list)
                 if (!double.IsNaN(g.TempC) && (double.IsNaN(s.GpuTempC) || g.TempC > s.GpuTempC)) s.GpuTempC = g.TempC;
+            return gpuRaw;
         }
 
         // ------------------------------------------------ CPU temperature: LibreHardwareMonitor, the opt-in helper, else ACPI zones
@@ -597,6 +620,7 @@ namespace HwWidget
             disposed = true;
             try { if (query != IntPtr.Zero) Pdh.PdhCloseQuery(query); } catch { }
             query = IntPtr.Zero;
+            if (procs != null) procs.Dispose();
             CloseAdapters();
         }
     }

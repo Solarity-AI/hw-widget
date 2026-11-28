@@ -34,6 +34,14 @@ namespace HwWidget
             s.Gpus = new GpuInfo[] { g, i };
             s.GpuPercent = g.Percent; s.GpuName = g.Name; s.GpuTempC = g.TempC;
             if (kind == "warm") { s.CpuTempC = 82; s.CpuPercent = 78; s.RamPercent = 83; s.GpuPercent = 88; g.Percent = 88; }
+            if (kind == "top")
+            {
+                s.TopCpu = new TopProc[] { new TopProc("chrome", 9.4), new TopProc("Code", 6.1), new TopProc("MsMpEng", 2.2) };
+                s.TopRam = new TopProc[] { new TopProc("chrome", 4.1 * 1073741824), new TopProc("Teams", 1.3 * 1073741824), new TopProc("Code", 640 * 1048576) };
+                s.TopRead = new TopProc[] { new TopProc("OneDrive", 6.2e6), new TopProc("chrome", 140e3) };
+                g.Top = new TopProc[] { new TopProc("dwm", 7), new TopProc("chrome", 4) };
+                i.Top = new TopProc[0];
+            }
             return s;
         }
 
@@ -41,9 +49,13 @@ namespace HwWidget
         {
             Directory.CreateDirectory(dir);
             float[] scales = { 1f, 1.25f, 1.5f, 2f };
-            string[] kinds = { "normal", "warm", "hot", "unknown", "live" };
+            string[] kinds = { "normal", "warm", "hot", "unknown", "top", "live" };
             HwSnapshot live;
-            using (HwSampler smp = new HwSampler()) { Thread.Sleep(1100); live = smp.Sample(); }
+            using (HwSampler smp = new HwSampler())
+            {
+                smp.WantProcesses = true;
+                smp.Sample(); Thread.Sleep(1100); live = smp.Sample();
+            }
             int n = 0;
             foreach (bool dark in new bool[] { true, false })
             {
@@ -314,6 +326,30 @@ namespace HwWidget
                 cardSaid.Contains("GPU 12% (51°C, 1.2 GB VRAM, Quadro RTX 4000 Max-Q)") && cardSaid.Contains("Disk 4%") && cardSaid.EndsWith("Network 178 KB/s download (21 KB/s upload)"));
             cardSaid = Painter.CardAccessibleText(Fake("unknown"), false);
             check("TC-223 a11y: unknown card values are read as unknown", cardSaid.Contains("CPU unknown") && cardSaid.Contains("Memory unknown") && !cardSaid.Contains(Fmt.Dash));
+            // Busiest processes: copies merged by name, per-core CPU, small values dropped, biggest first.
+            Dictionary<string, double> procCpu = new Dictionary<string, double>();
+            procCpu["_Total"] = 800; procCpu["Idle"] = 700; procCpu["chrome"] = 40; procCpu["chrome#1"] = 24; procCpu["Code"] = 30; procCpu["svchost"] = 2; procCpu["notepad.exe"] = 16;
+            TopProc[] topCpu = TopList.Top(procCpu, 3, 0.5, 8);
+            check("top: copies merged, per core, _Total and Idle skipped", topCpu.Length == 3 && topCpu[0].Name == "chrome" && topCpu[0].Value == 8 && topCpu[1].Name == "Code" && topCpu[2].Name == "notepad");
+            check("top: under the minimum is dropped (svchost 0.25%)", TopList.Top(procCpu, 9, 0.5, 8).Length == 3);
+            check("top: a name ending in # and letters keeps them", TopList.BaseName("C#Tool") == "C#Tool" && TopList.BaseName("svchost#12") == "svchost");
+            Dictionary<string, double> eng = new Dictionary<string, double>();
+            eng["pid_1200_luid_0x00000000_0x0000D1B7_phys_0_eng_0_engtype_3D"] = 20; eng["pid_1200_luid_0x00000000_0x0000D1B7_phys_0_eng_0_engtype_3D#1"] = 5;
+            eng["pid_1200_luid_0x00000000_0x0000D1B7_phys_0_eng_3_engtype_VideoDecode"] = 10; eng["pid_88_luid_0x00000000_0x0000D1B7_phys_0_eng_3_engtype_VideoDecode"] = 4;
+            eng["pid_0_luid_0x00000000_0x0000D1B7_phys_0_eng_0_engtype_3D"] = 50; eng["pid_77_luid_0x00000000_0x0000AAAA_phys_0_eng_0_engtype_3D"] = 9;
+            Dictionary<string, Dictionary<int, double>> gp = TopList.GpuByPid(eng);
+            check("top gpu: per adapter and process, busiest engine, pid 0 skipped", gp.Count == 2 && gp["0x00000000_0x0000D1B7"][1200] == 25 && gp["0x00000000_0x0000D1B7"][88] == 4 &&
+                !gp["0x00000000_0x0000D1B7"].ContainsKey(0) && gp["0x00000000_0x0000AAAA"][77] == 9);
+            check("fmt: process memory in MB, then GB", Fmt.Bytes(640 * 1048576.0) == "640 MB" && Fmt.Bytes(999.6 * 1048576) == "1.0 GB" && Fmt.Bytes(4.1 * 1073741824) == "4.1 GB");
+            List<Painter.Row> topRows = Painter.CardRows(Fake("top"), false, Palette.For(true));
+            check("card: busiest processes under CPU, Memory, GPU and Disk", topRows[1].Top.Count == 3 && topRows[1].Top[0][0] == "chrome" && topRows[1].Top[0][1] == "9%" &&
+                topRows[2].Top[2][1] == "640 MB" && topRows[3].Top.Count == 2 && topRows[4].Top.Count == 0 && topRows[5].Top[0][1] == "5.9 MB/s" && topRows[5].Sub.Contains("apps by data read") && topRows[6].Top.Count == 0);
+            check("card: rows grow by 15 DIP per process", Painter.RowHeight(topRows[1]) == 46 + 3 * 15 + 3 && Painter.RowHeight(topRows[6]) == 46);
+            string topSaid = Painter.CardAccessibleText(Fake("top"), false);
+            check("a11y: the card reads the busiest processes", topSaid.Contains("CPU 23% (Intel(R) Core(TM) i7-10850H CPU @ 2.70GHz), top: chrome 9%, Code 6%, MsMpEng 2%") && topSaid.Contains("top: OneDrive 5.9 MB/s"));
+            using (Bitmap closed = Painter.Card(Fake("normal"), false, Palette.For(true), 1f, false))
+            using (Bitmap open = Painter.Card(Fake("top"), false, Palette.For(true), 1f, false))
+                check("card: the closed-card snapshot keeps the old height", open.Height - closed.Height == (3 + 3 + 2 + 2) * 15 + 4 * 3);
             // TC-232 (QA-13): a VM's own network adapters count; the host's Hyper-V switch adapter and other virtual adapters don't.
             Dictionary<string, double> vmNet = new Dictionary<string, double>();
             vmNet["Microsoft Hyper-V Network Adapter"] = 1000; vmNet["Microsoft Hyper-V Network Adapter _2"] = 200;
