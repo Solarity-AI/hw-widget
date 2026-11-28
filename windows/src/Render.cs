@@ -65,6 +65,14 @@ namespace HwWidget
             if (double.IsNaN(g)) return Dash;
             return (g < 9.95 ? g.ToString("0.0", Inv) : R(g).ToString("0", Inv)) + " GB";
         }
+        // A process's memory: "640 MB" under 1 GB, else "1.2 GB" (1024-based).
+        public static string Bytes(double b)
+        {
+            if (double.IsNaN(b)) return Dash;
+            double mb = Math.Max(0, b) / (1024.0 * 1024);
+            if (R(mb) < 1000) return R(mb).ToString("0", Inv) + " MB";
+            return GB(mb / 1024);
+        }
         // Half away from zero, as GNOME and macOS show it (Math.Round alone rounds 68.5 to 68).
         static double R(double v) { return Math.Round(v, MidpointRounding.AwayFromZero); }
 
@@ -407,6 +415,16 @@ namespace HwWidget
         internal sealed class Row
         {
             public string Title, Sub, Value; public double Frac; public Color A, B, ValueColor, Dot;
+            public List<string[]> Top = new List<string[]>();   // busiest processes: { name, value }
+        }
+
+        public const float RowH = 46, TopLineH = 15, TopPad = 3;
+        internal static float RowHeight(Row r) { return RowH + (r.Top.Count > 0 ? r.Top.Count * TopLineH + TopPad : 0); }
+
+        static void AddTop(Row r, TopProc[] top, Func<double, string> fmt)
+        {
+            if (top == null) return;
+            foreach (TopProc t in top) r.Top.Add(new string[] { t.Name, fmt(t.Value) });
         }
 
         // Busy rows turn their bar amber (warm) or amber-to-red (critical), matching the pill.
@@ -425,7 +443,14 @@ namespace HwWidget
             {
                 string value = r.Value.StartsWith("↓ ") ? r.Value.Substring(2) + " download" : r.Value;
                 string sub = (r.Sub ?? "").Replace("↑ ", "").Replace(" · ", ", ");
-                parts.Add((r.Title + " " + value + (sub.Length > 0 ? " (" + sub + ")" : "")).Replace(Fmt.Dash, "unknown"));
+                string said = r.Title + " " + value + (sub.Length > 0 ? " (" + sub + ")" : "");
+                if (r.Top.Count > 0)
+                {
+                    List<string> top = new List<string>();
+                    foreach (string[] t in r.Top) top.Add(t[0] + " " + t[1]);
+                    said += ", top: " + string.Join(", ", top.ToArray());
+                }
+                parts.Add(said.Replace(Fmt.Dash, "unknown"));
             }
             return string.Join(", ", parts.ToArray());
         }
@@ -446,12 +471,14 @@ namespace HwWidget
 
             r = new Row(); r.Title = "CPU"; r.Sub = s.CpuName; r.Value = Fmt.Pct(s.CpuPercent);
             r.Frac = s.CpuPercent / 100; r.A = CpuA; r.B = CpuB; r.ValueColor = ValueColor(Fmt.Level(s.CpuPercent, 75, 90), p); Heat(r, Fmt.Level(s.CpuPercent, 75, 90));
+            AddTop(r, s.TopCpu, Fmt.Pct);
             rows.Add(r);
 
             r = new Row(); r.Title = "Memory";
             r.Sub = double.IsNaN(s.RamUsedGB) ? "Usage unavailable" : Fmt.GB(s.RamUsedGB).Replace(" GB", "") + " of " + Fmt.GB(s.RamTotalGB) + " in use";
             r.Value = Fmt.Pct(s.RamPercent); r.Frac = s.RamPercent / 100; r.A = RamA; r.B = RamB;
             r.ValueColor = ValueColor(Fmt.Level(s.RamPercent, 80, 90), p); Heat(r, Fmt.Level(s.RamPercent, 80, 90));
+            AddTop(r, s.TopRam, Fmt.Bytes);
             rows.Add(r);
 
             foreach (GpuInfo gi in s.Gpus)
@@ -465,10 +492,15 @@ namespace HwWidget
                 r.Sub = string.Join(" · ", parts.ToArray());
                 r.Value = Fmt.Pct(gi.Percent); r.Frac = gi.Percent / 100; r.A = GpuA; r.B = GpuB;
                 r.ValueColor = ValueColor(Fmt.Level(gi.Percent, 85, 95), p); Heat(r, Fmt.Level(gi.Percent, 85, 95));
+                AddTop(r, gi.Top, Fmt.Pct);
                 rows.Add(r);
             }
 
-            r = new Row(); r.Title = "Disk"; r.Sub = "Busiest drive, active time"; r.Value = Fmt.Pct(s.DiskPercent);
+            // Windows has no per-process network counter without admin rights: the list is each app's data read,
+            // which counts disk reads and network downloads together, so it sits under Disk and says so.
+            bool reads = s.TopRead != null && s.TopRead.Length > 0;
+            r = new Row(); r.Title = "Disk"; r.Sub = reads ? "Busiest drive · apps by data read, incl. network" : "Busiest drive, active time"; r.Value = Fmt.Pct(s.DiskPercent);
+            AddTop(r, s.TopRead, Fmt.Rate);
             r.Frac = s.DiskPercent / 100; r.A = DskA; r.B = DskB; r.ValueColor = ValueColor(Fmt.Level(s.DiskPercent, 80, 95), p); Heat(r, Fmt.Level(s.DiskPercent, 80, 95));
             rows.Add(r);
 
@@ -483,8 +515,10 @@ namespace HwWidget
         public static Bitmap Card(HwSnapshot s, bool fahrenheit, Palette p, float scale, bool pinned)
         {
             List<Row> rows = CardRows(s, fahrenheit, p);
-            const float RowH = 46, HeadH = 40, FootH = 28, M = CardMargin;
-            float W = CardW + M * 2, H = HeadH + RowH * rows.Count + FootH + M * 2;
+            const float HeadH = 40, FootH = 28, M = CardMargin;
+            float rowsH = 0;
+            foreach (Row r0 in rows) rowsH += RowHeight(r0);
+            float W = CardW + M * 2, H = HeadH + rowsH + FootH + M * 2;
             Bitmap bmp = new Bitmap((int)Math.Ceiling(W * scale), (int)Math.Ceiling(H * scale), PixelFormat.Format32bppArgb);
             using (Graphics g = Prep(bmp, scale))
             {
@@ -526,7 +560,15 @@ namespace HwWidget
                         Text(g, r.Title, tf, p.Text, new RectangleF(x + 16, y + 3, w - 16 - valueW - 6, 18), StringAlignment.Near);
                         Text(g, r.Sub ?? "", sf, p.SubText, new RectangleF(x + 16, y + 21, w - 16, 15), StringAlignment.Near);
                         Bar(g, new RectangleF(x + 16, y + 38, w - 16, 3.5f), r.Frac, r.A, r.B, p);
-                        y += RowH;
+                        float ty = y + RowH - 2;
+                        foreach (string[] t in r.Top)
+                        {
+                            float tvW = g.MeasureString(t[1], ff).Width;
+                            Text(g, t[1], ff, p.Text, new RectangleF(x + w - 90, ty, 90, TopLineH), StringAlignment.Far);
+                            Text(g, "• " + t[0], ff, p.SubText, new RectangleF(x + 22, ty, w - 22 - tvW - 8, TopLineH), StringAlignment.Near);
+                            ty += TopLineH;
+                        }
+                        y += RowHeight(r);
                     }
                     Text(g, pinned ? "Click to unpin · right-click for options" : "Click to pin · right-click for options",
                          ff, p.SubText, new RectangleF(x, y + 2, w, FootH - 6), StringAlignment.Near);

@@ -50,6 +50,12 @@ Turn the download cell off with **Show download speed** in the same menu.
 The colour is judged on the whole number shown, so `75%` CPU is always amber.
 An unknown value shows a dim dash instead of a guess.
 
+On Windows, the hover card also lists the **3 busiest processes** under CPU (share of all cores), Memory (private working
+set, as Task Manager shows it), each GPU (busiest engine) and Disk.
+Windows has no per-process network counter without admin rights, so the Disk list ranks apps by the data they read,
+which counts disk reads and network downloads together; the row says so.
+These counters are read only while the card is open, so the closed pill costs nothing extra.
+
 ## Install
 
 Get the code first: [download the latest release](https://github.com/Solarity-AI/hw-widget/releases/latest) and unzip it, or clone the repository.
@@ -141,7 +147,7 @@ Each command removes the widget, its startup entry and its settings. Run it from
 
 | Platform | Command | What it checks |
 | --- | --- | --- |
-| Windows | `windows\build.cmd`, then `windows\bin\HWWidget.exe --selftest out.txt` | 92 sensor, helper, install, layout, formatting, full-screen, contrast and accessibility checks |
+| Windows | `windows\build.cmd`, then `windows\bin\HWWidget.exe --selftest out.txt` | 101 sensor, helper, install, layout, formatting, busiest-process, full-screen, contrast and accessibility checks |
 | Windows | `windows\tests\scripts-test.ps1` | 46 build, install and uninstall checks (folder names with brackets, spaces, parentheses, `&`, `^`, `%41`, `!` and non-ASCII letters; a fresh self-test report; the Startup shortcut; rollback of a build that fails its self-test or exits with any other code; the Task Scheduler install; the uninstaller's cleanup when the widget can't remove itself) |
 | Windows | `windows\bin\HWWidget.exe --render <dir>` / `--probe <secs> <csv>` | PNG renders of every state / live sensor log |
 | Linux | `sh linux/tests/run-docker.sh` | 138 parser, sensor-tree, nvidia-smi, clock, contrast and model checks, 15 GNOME 42 module checks and 17 install and uninstall checks, in Docker on Debian trixie (GNOME 45+) and Ubuntu 22.04 (GNOME 42), plus PNG renders in `linux/tests/out` |
